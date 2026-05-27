@@ -21,5 +21,9 @@ def test_stop_the_track_not_hesitation():
 def test_bare_stop_is_still_hesitation():
     assert _HESITATION_PATTERNS.search("stop")
 
-def test_stop_in_sentence_is_still_hesitation():
-    assert _HESITATION_PATTERNS.search("actually stop")
+def test_stop_with_intermediate_words_not_hesitation():
+    # "(?:\w+\s+)*" allows any words between stop and the music keyword
+    assert not _HESITATION_PATTERNS.search("stop all the music")
+
+def test_stop_alone_in_context_is_still_hesitation():
+    assert _HESITATION_PATTERNS.search("please stop")
