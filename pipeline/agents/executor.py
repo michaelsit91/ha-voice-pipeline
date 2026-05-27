@@ -1,6 +1,7 @@
 import asyncio, json, logging, os
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
+from pipeline.music_assistant_client import MusicAssistantClient
 
 log = logging.getLogger("pipeline")
 
@@ -59,6 +60,50 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
     return {"entity_id": entity_id or area_id, "outcome": "success"}
 
 
+async def _run_music_step(
+    step: dict,
+    ha: HAClient,
+    ma: MusicAssistantClient,
+) -> str:
+    """Execute one music_assistant.play_media step: search then play."""
+    query      = step.get("query", "")
+    artist     = step.get("artist") or None
+    media_type = step.get("media_type", "track")
+    entity_id  = step.get("entity_id")
+
+    if not query:
+        return "Sorry, I didn't catch what you wanted to play."
+
+    try:
+        results = await ma.search(query, media_type=media_type, artist=artist)
+    except Exception as e:
+        log.warning("MUSIC | search error: %s", e)
+        return "Sorry, Music Assistant isn't responding right now."
+
+    if not results:
+        return f"Sorry, I couldn't find {query}."
+
+    best        = results[0]
+    uri         = best["uri"]
+    track_name  = best["name"]
+    artist_name = best["artist"]
+
+    try:
+        await ha.call_service(
+            "music_assistant", "play_media",
+            entity_id=entity_id,
+            media_id=uri,
+            media_type=media_type,
+        )
+    except Exception as e:
+        log.warning("MUSIC | play_media error: %s", e)
+        return "Sorry, I couldn't play that right now."
+
+    if artist_name:
+        return f"Playing {track_name} by {artist_name}."
+    return f"Playing {track_name}."
+
+
 async def execute(
     intent: str,
     steps: list[dict],
@@ -67,8 +112,16 @@ async def execute(
     ok_response: str = "",
     already_response: str = "",
     fail_response: str = "",
+    ma: MusicAssistantClient | None = None,
 ) -> str:
-    # Run all steps in parallel
+    # Music steps are handled separately — branch before HA execution
+    music_steps = [s for s in steps if s.get("domain") == "music_assistant"]
+    if music_steps:
+        if ma is None:
+            return "Sorry, Music Assistant is not configured."
+        return await _run_music_step(music_steps[0], ha, ma)
+
+    # Run all HA steps in parallel
     results = await asyncio.gather(*[_run_step(s, ha) for s in steps])
 
     outcomes  = [r["outcome"] for r in results]
