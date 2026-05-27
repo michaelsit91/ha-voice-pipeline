@@ -7,7 +7,8 @@ log = logging.getLogger("pipeline")
 # Detected before the LLM is called — zero latency, no Ollama round-trip.
 _HESITATION_PATTERNS = re.compile(
     r"\b(hold on|hold up|wait|never mind|nevermind|forget it|forget that|"
-    r"cancel|stop|abort|actually|scratch that|no wait|hang on)\b"
+    r"cancel|stop(?!\s+(?:\w+\s+)*(?:music|playing|song|track))|abort|"
+    r"actually|scratch that|no wait|hang on)\b"
     # Chinese hesitation / cancellation words (no \b needed for CJK)
     r"|等一下|等等|算了|不对|取消|停一下|不用了|算了吧|不是这个",
     re.IGNORECASE,
