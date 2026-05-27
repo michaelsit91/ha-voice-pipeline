@@ -9,6 +9,8 @@ log = logging.getLogger("pipeline")
 _STOP_WORDS = {"is","the","a","an","all","on","off","of","and","or","to","in",
                "are","was","it","be","turn","what","how","does","do"}
 
+_MUSIC_CONTROL_SERVICES = frozenset({"media_stop", "media_pause"})
+
 _CJK_RE = re.compile(r'[一-鿿㐀-䶿＀-￯]')
 
 def _is_cjk(text: str) -> bool:
@@ -106,7 +108,6 @@ async def run_pipeline(
         return "Sorry, I didn't understand that command."
 
     # Inject satellite's resolved MA player into music steps (overrides LLM's choice)
-    _MUSIC_CONTROL_SERVICES = {"media_stop", "media_pause"}
     if ma is not None:
         ma_player = ma.resolve_player(satellite)
         if ma_player:
