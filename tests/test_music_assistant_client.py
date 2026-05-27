@@ -109,3 +109,71 @@ def test_resolve_player_none_falls_back_to_first():
 def test_resolve_player_empty_map_returns_none():
     ma = MusicAssistantClient("http://ha:8123", "token", "entry-id")
     assert ma.resolve_player("respeaker_lite") is None
+
+# ── search ────────────────────────────────────────────────────────────────────
+
+def _mock_http_post(response_body):
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = response_body
+    mock_resp.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+@pytest.mark.asyncio
+async def test_search_track_returns_name_and_artist():
+    ma = MusicAssistantClient("http://ha:8123", "token", "entry-123")
+    body = {
+        "service_response": {
+            "tracks": [{
+                "media_type": "track",
+                "uri": "spotify://track/abc123",
+                "name": "Blinding Lights",
+                "artists": [{"name": "The Weeknd", "media_type": "artist"}],
+            }],
+            "artists": [], "albums": [], "playlists": [],
+        }
+    }
+    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_http_post(body)
+        results = await ma.search("Blinding Lights", media_type="track")
+    assert len(results) == 1
+    assert results[0] == {
+        "uri": "spotify://track/abc123",
+        "name": "Blinding Lights",
+        "artist": "The Weeknd",
+    }
+
+@pytest.mark.asyncio
+async def test_search_artist_uses_name_as_artist():
+    ma = MusicAssistantClient("http://ha:8123", "token", "entry-123")
+    body = {
+        "service_response": {
+            "artists": [{
+                "media_type": "artist",
+                "uri": "spotify://artist/xyz",
+                "name": "The Weeknd",
+            }],
+            "tracks": [], "albums": [], "playlists": [],
+        }
+    }
+    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_http_post(body)
+        results = await ma.search("The Weeknd", media_type="artist")
+    assert results[0]["name"] == "The Weeknd"
+    assert results[0]["artist"] == "The Weeknd"
+
+@pytest.mark.asyncio
+async def test_search_empty_returns_empty_list():
+    ma = MusicAssistantClient("http://ha:8123", "token", "entry-123")
+    body = {
+        "service_response": {
+            "tracks": [], "artists": [], "albums": [], "playlists": [],
+        }
+    }
+    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
+        mock_cls.return_value = _mock_http_post(body)
+        results = await ma.search("xyzzy404notfound", media_type="track")
+    assert results == []
