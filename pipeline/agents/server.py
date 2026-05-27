@@ -4,8 +4,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.runner import run_pipeline
+from pipeline.music_assistant_client import MusicAssistantClient
 
 app = FastAPI()
+
+import logging
+log = logging.getLogger(__name__)
 
 _ha = HAClient(
     os.getenv("HA_URL",   "http://192.168.68.250:8123"),
@@ -15,6 +19,20 @@ _ollama = OllamaClient(
     os.getenv("OLLAMA_URL", "http://192.168.68.250:11434"),
     os.getenv("MODEL",      "default"),
 )
+_ma = MusicAssistantClient(
+    os.getenv("HA_URL",             ""),
+    os.getenv("HA_TOKEN",           ""),
+    os.getenv("MA_CONFIG_ENTRY_ID", ""),
+)
+
+
+@app.on_event("startup")
+async def _startup_warmup():
+    try:
+        await _ma.discover()
+    except Exception as e:
+        log.warning("MUSIC | discovery failed at startup: %s", e)
+
 
 @app.get("/health")
 async def health():
@@ -48,7 +66,8 @@ async def chat_completions(request: Request):
     if not transcript:
         return JSONResponse({"error": "no user message"}, status_code=400)
 
-    text = await run_pipeline(transcript, _ha, _ollama)
+    satellite = request.query_params.get("satellite")
+    text = await run_pipeline(transcript, _ha, _ollama, ma=_ma, satellite=satellite)
     cid  = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     model_id = os.getenv("MODEL", "default")
     ts   = int(time.time())
