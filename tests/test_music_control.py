@@ -31,7 +31,6 @@ def test_stop_alone_in_context_is_still_hesitation():
 
 # ── Task 2: planner music control rules ───────────────────────────────────────
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -85,6 +84,7 @@ async def test_planner_stop_music_emits_media_stop():
     assert len(steps) == 1
     assert steps[0]["domain"] == "media_player"
     assert steps[0]["service"] == "media_stop"
+    assert result["ok_response"] == "Music stopped."
 
 
 @pytest.mark.asyncio
@@ -96,19 +96,6 @@ async def test_planner_pause_emits_media_pause():
     assert len(steps) == 1
     assert steps[0]["domain"] == "media_player"
     assert steps[0]["service"] == "media_pause"
-
-
-@pytest.mark.asyncio
-async def test_planner_stop_music_ok_response():
-    from pipeline.agents.planner import plan
-    ollama = _make_ollama_returning(_MEDIA_STOP_PLAN)
-    result = await plan("stop the music", [_MUSIC_ENTITY], [], ollama)
-    assert result["ok_response"] == "Music stopped."
-
-
-@pytest.mark.asyncio
-async def test_planner_pause_ok_response():
-    from pipeline.agents.planner import plan
-    ollama = _make_ollama_returning(_MEDIA_PAUSE_PLAN)
-    result = await plan("pause", [_MUSIC_ENTITY], [], ollama)
     assert result["ok_response"] == "Paused."
+
+

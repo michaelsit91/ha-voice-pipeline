@@ -104,6 +104,7 @@ MUSIC CONTROL COMMANDS:
 - "pause" / "pause the music" / "pause that" → emit ONE step: domain=media_player, service=media_pause.
 - entity_id: use the media_player entity with mass_player_type player from the Devices list.
 - ok_response: "Music stopped." for stop; "Paused." for pause.
+- already_response: "" (no already-state applies for stop/pause).
 
 --- EXAMPLES ---
 
