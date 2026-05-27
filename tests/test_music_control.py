@@ -99,3 +99,92 @@ async def test_planner_pause_emits_media_pause():
     assert result["ok_response"] == "Paused."
 
 
+# ── Task 3: runner injects MA player into media_stop / media_pause ────────────
+
+from unittest.mock import patch
+from pipeline.runner import run_pipeline
+from pipeline.music_assistant_client import MusicAssistantClient
+
+
+def _make_ha_runner(entities=None, areas=None):
+    ha = MagicMock()
+    ha.get_entities = AsyncMock(return_value=entities or [
+        {"entity_id": "media_player.respeaker_lite_media_player_2",
+         "name": "Spotify", "state": "playing"},
+        {"entity_id": "media_player.wrong_player",
+         "name": "Wrong", "state": "idle"},
+    ])
+    ha.get_areas = AsyncMock(return_value=areas or [])
+    return ha
+
+
+def _make_ma_runner(player="media_player.respeaker_lite_media_player_2"):
+    ma = MagicMock(spec=MusicAssistantClient)
+    ma.resolve_player = MagicMock(return_value=player)
+    return ma
+
+
+def _plan_with_service(service: str):
+    return {
+        "corrected": "stop the music",
+        "intent": "action",
+        "steps": [{
+            "domain": "media_player",
+            "service": service,
+            "entity_id": "media_player.wrong_player",
+        }],
+        "ok_response": "Music stopped.", "already_response": "", "fail_response": "Sorry.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_runner_injects_ma_player_into_media_stop():
+    ha = _make_ha_runner()
+    ollama = _make_ollama_returning(_plan_with_service("media_stop"))
+    ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
+
+    with patch("pipeline.runner.execute") as mock_exec:
+        mock_exec.return_value = "Music stopped."
+        await run_pipeline("stop the music", ha, ollama, ma=ma, satellite="respeaker_lite")
+
+    called_steps = mock_exec.call_args.kwargs["steps"]
+    assert called_steps[0]["entity_id"] == "media_player.respeaker_lite_media_player_2"
+
+
+@pytest.mark.asyncio
+async def test_runner_injects_ma_player_into_media_pause():
+    ha = _make_ha_runner()
+    ollama = _make_ollama_returning(_plan_with_service("media_pause"))
+    ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
+
+    with patch("pipeline.runner.execute") as mock_exec:
+        mock_exec.return_value = "Paused."
+        await run_pipeline("pause", ha, ollama, ma=ma, satellite="respeaker_lite")
+
+    called_steps = mock_exec.call_args.kwargs["steps"]
+    assert called_steps[0]["entity_id"] == "media_player.respeaker_lite_media_player_2"
+
+
+@pytest.mark.asyncio
+async def test_runner_does_not_inject_unrelated_media_player_steps():
+    """media_player.turn_on (e.g. TV) must NOT get the MA player injected."""
+    ha = _make_ha_runner(entities=[
+        {"entity_id": "media_player.tv", "name": "TV", "state": "off"},
+        {"entity_id": "media_player.respeaker_lite_media_player_2", "name": "Spotify", "state": "idle"},
+    ])
+    plan_result = {
+        "corrected": "turn on the TV",
+        "intent": "action",
+        "steps": [{"domain": "media_player", "service": "turn_on", "entity_id": "media_player.tv"}],
+        "ok_response": "TV on.", "already_response": "", "fail_response": "Sorry.",
+    }
+    ollama = _make_ollama_returning(plan_result)
+    ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
+
+    with patch("pipeline.runner.execute") as mock_exec:
+        mock_exec.return_value = "TV on."
+        await run_pipeline("turn on the TV", ha, ollama, ma=ma, satellite="respeaker_lite")
+
+    called_steps = mock_exec.call_args.kwargs["steps"]
+    assert called_steps[0]["entity_id"] == "media_player.tv"
+

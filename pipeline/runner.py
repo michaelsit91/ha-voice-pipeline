@@ -106,11 +106,15 @@ async def run_pipeline(
         return "Sorry, I didn't understand that command."
 
     # Inject satellite's resolved MA player into music steps (overrides LLM's choice)
+    _MUSIC_CONTROL_SERVICES = {"media_stop", "media_pause"}
     if ma is not None:
         ma_player = ma.resolve_player(satellite)
         if ma_player:
             for step in planned["steps"]:
                 if step.get("domain") == "music_assistant":
+                    step["entity_id"] = ma_player
+                elif (step.get("domain") == "media_player"
+                      and step.get("service") in _MUSIC_CONTROL_SERVICES):
                     step["entity_id"] = ma_player
 
     # Fast path: single-step queries skip the executor LLM entirely
