@@ -413,6 +413,72 @@ CASES = [
             "expected query with get_state and office entity from ZH transcript",
         ),
     },
+
+    # ── Category 9: Music playback ────────────────────────────────────────────
+    {
+        "category": "music_play",
+        "description": "Play a specific song by title",
+        "transcript": "play Blinding Lights",
+        "intent": "action",
+        "check": lambda r: (
+            _valid_json(r)
+            and r.get("intent") == "action"
+            and any(s.get("domain") == "music_assistant" for s in r.get("steps", []))
+            and any(s.get("service") == "play_media" for s in r.get("steps", []))
+            and any(s.get("query") for s in r.get("steps", [])),
+            "expected music_assistant.play_media step with non-empty query",
+        ),
+    },
+    {
+        "category": "music_play",
+        "description": "Play song with STT errors (blainding lites)",
+        "transcript": "play blainding lites",
+        "intent": "action",
+        "check": lambda r: (
+            _valid_json(r)
+            and r.get("intent") == "action"
+            and any(s.get("domain") == "music_assistant" for s in r.get("steps", []))
+            and any(
+                "blind" in s.get("query", "").lower() or "light" in s.get("query", "").lower()
+                for s in r.get("steps", [])
+            ),
+            "expected music_assistant step, query corrected toward 'Blinding Lights'",
+        ),
+    },
+    {
+        "category": "music_play",
+        "description": "Play by artist (something by X)",
+        "transcript": "play something by The Weeknd",
+        "intent": "action",
+        "check": lambda r: (
+            _valid_json(r)
+            and r.get("intent") == "action"
+            and any(s.get("domain") == "music_assistant" for s in r.get("steps", []))
+            and any(
+                s.get("media_type") == "artist"
+                or "weeknd" in s.get("query", "").lower()
+                for s in r.get("steps", [])
+            ),
+            "expected music_assistant step targeting artist The Weeknd",
+        ),
+    },
+    {
+        "category": "music_play",
+        "description": "Play song with artist named (title by artist)",
+        "transcript": "play Hotel California by the Eagles",
+        "intent": "action",
+        "check": lambda r: (
+            _valid_json(r)
+            and r.get("intent") == "action"
+            and any(s.get("domain") == "music_assistant" for s in r.get("steps", []))
+            and any(
+                "california" in s.get("query", "").lower()
+                or "hotel" in s.get("query", "").lower()
+                for s in r.get("steps", [])
+            ),
+            "expected music_assistant step with 'Hotel California' in query",
+        ),
+    },
 ]
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

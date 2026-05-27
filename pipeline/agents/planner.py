@@ -27,10 +27,13 @@ _RESPONSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "domain":    {"type": "string"},
-                    "service":   {"type": "string"},
-                    "entity_id": {"type": "string"},
-                    "area_id":   {"type": "string"},
+                    "domain":     {"type": "string"},
+                    "service":    {"type": "string"},
+                    "entity_id":  {"type": "string"},
+                    "area_id":    {"type": "string"},
+                    "query":      {"type": "string"},
+                    "artist":     {"type": "string"},
+                    "media_type": {"type": "string"},
                 },
                 "required": ["domain", "service"],
             },
@@ -87,6 +90,14 @@ Response rules:
 - Order steps so they can execute independently (no dependencies between steps)
 - WARNING: If you are unsure which entity_id to use, pick the closest matching one from the list. NEVER make up an entity_id or area_id.
 
+MUSIC COMMANDS:
+- When the user wants to play a song, artist, album, or playlist, emit ONE music_assistant.play_media step.
+- entity_id: use the media_player entity with mass_player_type player from the Devices list.
+- query: STT-corrected search term using your knowledge of music (e.g. 'blainding lites' -> 'Blinding Lights').
+- media_type: 'track' for a specific song, 'artist' for 'play X' or 'something by X', 'album' for album, 'playlist' for playlist.
+- artist: only include when the user explicitly names an artist alongside a title.
+- ok_response: 'Playing {query}.' -- keep it short.
+
 --- EXAMPLES ---
 
 Devices: light.office_light,Office Light,on | fan.living_room_fan,Living Room Fan,off
@@ -109,6 +120,16 @@ Transcript: turn off all living room lights and the office fan
 
 Transcript: dim the kitchen light to fifty percent
 {"corrected":"dim the kitchen light to 50%","intent":"action","steps":[{"domain":"light","service":"turn_on","entity_id":"light.kitchen_light","brightness_pct":50}],"ok_response":"Kitchen light dimmed to 50%.","fail_response":"Sorry, I couldn't dim the kitchen light."}
+
+Devices: media_player.respeaker_lite_media_player_2,Spotify,playing
+Transcript: play blinding lights
+{"corrected":"play Blinding Lights","intent":"action","steps":[{"domain":"music_assistant","service":"play_media","entity_id":"media_player.respeaker_lite_media_player_2","query":"Blinding Lights","media_type":"track"}],"ok_response":"Playing Blinding Lights.","already_response":"","fail_response":"Sorry, I couldn't play that."}
+
+Transcript: play something by the weeknd
+{"corrected":"play something by The Weeknd","intent":"action","steps":[{"domain":"music_assistant","service":"play_media","entity_id":"media_player.respeaker_lite_media_player_2","query":"The Weeknd","media_type":"artist"}],"ok_response":"Playing The Weeknd.","already_response":"","fail_response":"Sorry, I couldn't play that."}
+
+Transcript: play hotel california by the eagles
+{"corrected":"play Hotel California by the Eagles","intent":"action","steps":[{"domain":"music_assistant","service":"play_media","entity_id":"media_player.respeaker_lite_media_player_2","query":"Hotel California","artist":"Eagles","media_type":"track"}],"ok_response":"Playing Hotel California by the Eagles.","already_response":"","fail_response":"Sorry, I couldn't play that."}
 """
 
 _STOP_WORDS = {"the", "a", "an", "is", "on", "off", "all", "are", "in", "turn",
@@ -172,6 +193,10 @@ def _validate_steps(steps: list[dict], entities: list[dict], areas: list[dict]) 
     valid_area_ids   = {a["area_id"]   for a in areas}
     cleaned = []
     for step in steps:
+        # Music Assistant steps: entity_id is injected by the runner — skip validation
+        if step.get("domain") == "music_assistant":
+            cleaned.append(step)
+            continue
         eid = step.get("entity_id")
         aid = step.get("area_id")
 
