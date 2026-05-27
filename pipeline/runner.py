@@ -85,7 +85,13 @@ async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient
         return "All of those are on."
     return f"{len(on)} on and {len(off)} off."
 
-async def run_pipeline(transcript: str, ha: HAClient, ollama: OllamaClient) -> str:
+async def run_pipeline(
+    transcript: str,
+    ha: HAClient,
+    ollama: OllamaClient,
+    ma=None,
+    satellite: str | None = None,
+) -> str:
     # Hesitation/cancellation check — zero latency, no HA or Ollama calls needed
     if _HESITATION_PATTERNS.search(transcript):
         log.info("PLAN | intent=hesitation  transcript=%r", transcript)
@@ -98,6 +104,14 @@ async def run_pipeline(transcript: str, ha: HAClient, ollama: OllamaClient) -> s
              planned.get("intent"), planned.get("corrected"), planned.get("steps"))
     if not planned.get("steps"):
         return "Sorry, I didn't understand that command."
+
+    # Inject satellite's resolved MA player into music steps (overrides LLM's choice)
+    if ma is not None:
+        ma_player = ma.resolve_player(satellite)
+        if ma_player:
+            for step in planned["steps"]:
+                if step.get("domain") == "music_assistant":
+                    step["entity_id"] = ma_player
 
     # Fast path: single-step queries skip the executor LLM entirely
     if planned.get("intent") == "query":
@@ -113,4 +127,5 @@ async def run_pipeline(transcript: str, ha: HAClient, ollama: OllamaClient) -> s
         ok_response=planned.get("ok_response", ""),
         already_response=planned.get("already_response", ""),
         fail_response=planned.get("fail_response", ""),
+        ma=ma,
     )
