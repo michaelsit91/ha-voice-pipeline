@@ -99,6 +99,12 @@ MUSIC COMMANDS:
 - artist: only include when the user explicitly names an artist alongside a title.
 - ok_response: 'Playing {query}.' -- keep it short.
 
+MUSIC CONTROL COMMANDS:
+- "stop the music" / "stop playing" / "stop that song" → emit ONE step: domain=media_player, service=media_stop.
+- "pause" / "pause the music" / "pause that" → emit ONE step: domain=media_player, service=media_pause.
+- entity_id: use the media_player entity with mass_player_type player from the Devices list.
+- ok_response: "Music stopped." for stop; "Paused." for pause.
+
 --- EXAMPLES ---
 
 Devices: light.office_light,Office Light,on | fan.living_room_fan,Living Room Fan,off
@@ -131,6 +137,12 @@ Transcript: play something by the weeknd
 
 Transcript: play hotel california by the eagles
 {"corrected":"play Hotel California by the Eagles","intent":"action","steps":[{"domain":"music_assistant","service":"play_media","entity_id":"media_player.respeaker_lite_media_player_2","query":"Hotel California","artist":"Eagles","media_type":"track"}],"ok_response":"Playing Hotel California by the Eagles.","already_response":"","fail_response":"Sorry, I couldn't play that."}
+
+Transcript: stop the music
+{"corrected":"stop the music","intent":"action","steps":[{"domain":"media_player","service":"media_stop","entity_id":"media_player.respeaker_lite_media_player_2"}],"ok_response":"Music stopped.","already_response":"","fail_response":"Sorry, I couldn't stop the music."}
+
+Transcript: pause
+{"corrected":"pause","intent":"action","steps":[{"domain":"media_player","service":"media_pause","entity_id":"media_player.respeaker_lite_media_player_2"}],"ok_response":"Paused.","already_response":"","fail_response":"Sorry, I couldn't pause the music."}
 """
 
 _STOP_WORDS = {"the", "a", "an", "is", "on", "off", "all", "are", "in", "turn",
