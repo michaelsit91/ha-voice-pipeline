@@ -1,0 +1,25 @@
+services:
+  ha-voice-pipeline:
+    build: .
+    image: ha-voice-pipeline:latest
+    container_name: ha-voice-pipeline
+    restart: unless-stopped
+    ports:
+      - "18795:18795"
+    env_file:
+      - config.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:18795/health', timeout=4); r.raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - llm-voice
+
+networks:
+  llm-voice:
+    external: true
+    name: llm-voice_default

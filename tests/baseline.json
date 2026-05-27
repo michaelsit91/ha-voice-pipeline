@@ -1,0 +1,23 @@
+{
+  "agent": "ha-voice-pipeline",
+  "measured": "2026-05-06",
+  "hardware": "RTX 3060 12GB @ 1957 MHz locked",
+  "model": "huihui_ai/qwen3-abliterated:4b Q4_K_M via Ollama",
+  "executor": "direct-dispatch (no LLM tool loop)",
+  "test_method": "direct container at :18795, 5 warm runs per command",
+  "model_history": {
+    "qwen3.5-9b-abliterated": {"avg_s": {"status_query": 2.88, "single_action": 2.96, "multi_device": 4.34}},
+    "qwen3-4b-base":          {"avg_s": {"note": "unusable — think:false not suppressed, steps always empty"}},
+    "qwen3-4b-abliterated":   {"avg_s": {"status_query": 0.85, "single_action": 1.01, "multi_device": 1.09}}
+  },
+  "commands": {
+    "status_query": {"min": 0.83, "avg": 0.85, "max": 0.94},
+    "single_action": {"min": 0.99, "avg": 1.01, "max": 1.02},
+    "multi_device":  {"min": 1.06, "avg": 1.09, "max": 1.15}
+  },
+  "regression_thresholds_seconds": {
+    "status_query": 2.5,
+    "single_action": 2.5,
+    "multi_device": 3.0
+  }
+}
