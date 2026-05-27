@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
+from pipeline.music_assistant_client import MusicAssistantClient
 from pipeline.runner import run_pipeline
 
 # ── Logging with local timezone ──────────────────────────────────────────────
@@ -38,6 +39,12 @@ async def _startup_warmup():
                                "options": {"num_ctx": 8192}})
     except Exception:
         pass
+    # Discover satellite → MA player map
+    try:
+        await _ma.discover()
+        log.info("MUSIC | satellite_map: %s", _ma._satellite_map)
+    except Exception as e:
+        log.warning("MUSIC | discovery failed at startup: %s", e)
 
 _ha = HAClient(
     os.getenv("HA_URL", ""),
@@ -46,6 +53,11 @@ _ha = HAClient(
 _ollama = OllamaClient(
     os.getenv("OLLAMA_URL", ""),
     os.getenv("MODEL",      "default"),
+)
+_ma = MusicAssistantClient(
+    os.getenv("HA_URL",             ""),
+    os.getenv("HA_TOKEN",           ""),
+    os.getenv("MA_CONFIG_ENTRY_ID", ""),
 )
 
 # Validate required environment variables at startup
@@ -90,8 +102,9 @@ async def chat_completions(request: Request):
     _pipeline_busy = True
     t0 = time.perf_counter()
     log.info("IN  | %r", transcript)
+    satellite = request.query_params.get("satellite")
     try:
-        text = await run_pipeline(transcript, _ha, _ollama)
+        text = await run_pipeline(transcript, _ha, _ollama, ma=_ma, satellite=satellite)
     finally:
         _pipeline_busy = False
     log.info("OUT | %.2fs | %r", time.perf_counter() - t0, text)
