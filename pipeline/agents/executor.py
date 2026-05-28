@@ -1,4 +1,4 @@
-import asyncio, json, logging, os
+import asyncio, json, logging, os, random
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.music_assistant_client import MusicAssistantClient
@@ -13,6 +13,36 @@ _PARTIAL_SYSTEM = (
     "Compose ONE sentence of plain spoken English reporting what happened. "
     "No markdown, no emojis, no lists."
 )
+
+# Natural-sounding acknowledgment prefixes added randomly to successful action
+# responses so Piper doesn't repeat the exact same phrase every time.
+# Empty string entries increase the chance of no prefix (keeps original phrasing).
+_REPLY_PREFIXES = [
+    "",          # no prefix — keeps original
+    "",          # no prefix — keeps original (double-weighted for ~30% no-change rate)
+    "Sure, ",
+    "Done! ",
+    "Got it, ",
+    "OK, ",
+    "Alright, ",
+]
+
+
+def _vary(text: str) -> str:
+    """Randomly prepend one of several natural acknowledgment phrases.
+
+    Applied only to action confirmations before Piper speaks them.
+    Empty-prefix entries in _REPLY_PREFIXES mean ~30% of responses keep
+    their original phrasing unchanged.
+    """
+    if not text:
+        return text
+    prefix = random.choice(_REPLY_PREFIXES)
+    if not prefix:
+        return text
+    # Lowercase the first character of the original sentence so "Sure, The light
+    # is on." doesn't happen — it becomes "Sure, the light is on."
+    return prefix + text[0].lower() + text[1:]
 
 
 # Step keys that are routing metadata, not HA service data.
@@ -183,8 +213,8 @@ async def execute(
 
     if n_fail == 0:
         if all(r["outcome"] == "already" for r in results) and already_response:
-            return already_response
-        return ok_response or "Done."
+            return _vary(already_response)
+        return _vary(ok_response) if ok_response else "Done."
 
     if n_fail == n_total:
         return fail_response or "Sorry, I couldn't complete that."
