@@ -24,7 +24,6 @@ log.propagate = False
 
 app = FastAPI()
 
-_pipeline_busy = False
 
 @app.on_event("startup")
 async def _startup_warmup():
@@ -111,19 +110,14 @@ async def chat_completions(request: Request):
     if not transcript:
         return JSONResponse({"error": "no user message"}, status_code=400)
 
-    global _pipeline_busy
-    _pipeline_busy = True
     t0 = time.perf_counter()
     log.info("IN  | %r", transcript)
     satellite = request.query_params.get("satellite")
-    try:
-        text = await run_pipeline(
-            transcript, _ha, _ollama,
-            ma=_ma, satellite=satellite,
-            spotify_sync=_spotify_sync,
-        )
-    finally:
-        _pipeline_busy = False
+    text = await run_pipeline(
+        transcript, _ha, _ollama,
+        ma=_ma, satellite=satellite,
+        spotify_sync=_spotify_sync,
+    )
     log.info("OUT | %.2fs | %r", time.perf_counter() - t0, text)
     cid  = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     model_id = os.getenv("MODEL", "default")

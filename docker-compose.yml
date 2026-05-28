@@ -5,7 +5,7 @@ services:
     container_name: ha-voice-pipeline
     restart: unless-stopped
     ports:
-      - "18795:18795"
+      - "${PORT:-18795}:${PORT:-18795}"
     env_file:
       - config.env
     volumes:

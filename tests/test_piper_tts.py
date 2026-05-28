@@ -23,13 +23,15 @@ import os
 import pytest
 import websockets
 
-HA_URL   = os.getenv("HA_URL",   "http://192.168.68.250:8123")
-HA_TOKEN = os.getenv("HA_TOKEN", "")
+HA_URL       = os.getenv("HA_URL",       "http://homeassistant.local:8123")
+HA_TOKEN     = os.getenv("HA_TOKEN",     "")
+_PIPELINE_ID = os.getenv("HA_PIPELINE_ID", "")
 
-_WS_URL  = HA_URL.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
+_WS_URL = HA_URL.replace("http://", "ws://").replace("https://", "wss://") + "/api/websocket"
 
-# The pipeline that wires Wyoming STT → extended_openai_conversation → Wyoming TTS (Piper)
-_PIPELINE_ID = "01kac7jws1frz6s2x3v9mvnfz4"
+if not _PIPELINE_ID:
+    import pytest as _pytest
+    _pytest.skip("HA_PIPELINE_ID not set — skipping Piper TTS tests", allow_module_level=True)
 
 
 async def _run_assist(text: str) -> dict:
