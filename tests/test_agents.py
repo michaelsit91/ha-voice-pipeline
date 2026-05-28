@@ -70,19 +70,49 @@ async def test_execute_query_returns_state(ha, ollama):
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_execute_action_turn_on(ha, ollama):
-    steps = [{"domain": "light", "service": "turn_on",
-              "entity_id": "light.kitchen_ceiling"}]
-    result = await execute(intent="action", steps=steps, ha=ha, ollama=ollama,
-                           ok_response="The kitchen ceiling light is now on.",
-                           fail_response="Sorry, I couldn't reach the kitchen ceiling light.")
-    assert isinstance(result, str) and len(result) > 0
+    _eid = "light.kitchen_ceiling"
+    try:
+        initial = (await ha.get_state(_eid))["state"]
+    except Exception:
+        initial = None
+
+    steps = [{"domain": "light", "service": "turn_on", "entity_id": _eid}]
+    try:
+        result = await execute(intent="action", steps=steps, ha=ha, ollama=ollama,
+                               ok_response="The kitchen ceiling light is now on.",
+                               fail_response="Sorry, I couldn't reach the kitchen ceiling light.")
+        assert isinstance(result, str) and len(result) > 0
+    finally:
+        if initial is not None:
+            svc = "turn_on" if initial == "on" else "turn_off"
+            try:
+                await ha.call_service("light", svc, entity_id=_eid)
+            except Exception:
+                pass
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_execute_multi_step(ha, ollama, ha_context):
     lights = [e for e in ha_context["entities"] if e["entity_id"].startswith("light.")][:2]
+    # Capture state of each light before the test
+    initial_states: dict[str, str] = {}
+    for light in lights:
+        try:
+            s = await ha.get_state(light["entity_id"])
+            initial_states[light["entity_id"]] = s["state"]
+        except Exception:
+            pass
+
     steps = [{"domain": "light", "service": "turn_off", "entity_id": l["entity_id"]}
              for l in lights]
-    result = await execute(intent="action", steps=steps, ha=ha, ollama=ollama,
-                           ok_response="The lights are off.",
-                           fail_response="Couldn't turn off the lights.")
-    assert isinstance(result, str) and len(result) > 0
+    try:
+        result = await execute(intent="action", steps=steps, ha=ha, ollama=ollama,
+                               ok_response="The lights are off.",
+                               fail_response="Couldn't turn off the lights.")
+        assert isinstance(result, str) and len(result) > 0
+    finally:
+        for eid, state in initial_states.items():
+            svc = "turn_on" if state == "on" else "turn_off"
+            try:
+                await ha.call_service("light", svc, entity_id=eid)
+            except Exception:
+                pass

@@ -10,7 +10,8 @@ log = logging.getLogger("pipeline")
 _STOP_WORDS = {"is","the","a","an","all","on","off","of","and","or","to","in",
                "are","was","it","be","turn","what","how","does","do"}
 
-_MUSIC_CONTROL_SERVICES = frozenset({"media_stop", "media_pause"})
+_MUSIC_CONTROL_SERVICES = frozenset({"media_stop", "media_pause",
+                                      "volume_up", "volume_down", "volume_set"})
 
 _CJK_RE = re.compile(r'[一-鿿㐀-䶿＀-￯]')
 

@@ -1,4 +1,4 @@
-"""Tests for music stop/pause voice commands."""
+"""Tests for music stop/pause/volume voice commands."""
 import pytest
 import re
 from pipeline.agents.planner import _HESITATION_PATTERNS
@@ -187,4 +187,101 @@ async def test_runner_does_not_inject_unrelated_media_player_steps():
 
     called_steps = mock_exec.call_args.kwargs["steps"]
     assert called_steps[0]["entity_id"] == "media_player.tv"
+
+
+# ── Volume commands ────────────────────────────────────────────────────────────
+
+_VOLUME_UP_PLAN = {
+    "corrected": "louder",
+    "intent": "action",
+    "steps": [{
+        "domain": "media_player",
+        "service": "volume_up",
+        "entity_id": "media_player.respeaker_lite_media_player_2",
+    }],
+    "ok_response": "Volume up.", "already_response": "", "fail_response": "Sorry.",
+}
+
+_VOLUME_DOWN_PLAN = {
+    "corrected": "volume down",
+    "intent": "action",
+    "steps": [{
+        "domain": "media_player",
+        "service": "volume_down",
+        "entity_id": "media_player.respeaker_lite_media_player_2",
+    }],
+    "ok_response": "Volume down.", "already_response": "", "fail_response": "Sorry.",
+}
+
+_VOLUME_SET_PLAN = {
+    "corrected": "set volume to 40%",
+    "intent": "action",
+    "steps": [{
+        "domain": "media_player",
+        "service": "volume_set",
+        "entity_id": "media_player.respeaker_lite_media_player_2",
+        "volume_level": 0.4,
+    }],
+    "ok_response": "Volume set to 40%.", "already_response": "", "fail_response": "Sorry.",
+}
+
+
+@pytest.mark.asyncio
+async def test_planner_volume_up_emits_correct_step():
+    from pipeline.agents.planner import plan
+    ollama = _make_ollama_returning(_VOLUME_UP_PLAN)
+    result = await plan("louder", [_MUSIC_ENTITY], [], ollama)
+    step = result["steps"][0]
+    assert step["domain"] == "media_player"
+    assert step["service"] == "volume_up"
+    assert result["ok_response"] == "Volume up."
+
+
+@pytest.mark.asyncio
+async def test_planner_volume_down_emits_correct_step():
+    from pipeline.agents.planner import plan
+    ollama = _make_ollama_returning(_VOLUME_DOWN_PLAN)
+    result = await plan("volume down", [_MUSIC_ENTITY], [], ollama)
+    step = result["steps"][0]
+    assert step["domain"] == "media_player"
+    assert step["service"] == "volume_down"
+
+
+@pytest.mark.asyncio
+async def test_planner_volume_set_carries_volume_level():
+    from pipeline.agents.planner import plan
+    ollama = _make_ollama_returning(_VOLUME_SET_PLAN)
+    result = await plan("set volume to 40 percent", [_MUSIC_ENTITY], [], ollama)
+    step = result["steps"][0]
+    assert step["service"] == "volume_set"
+    assert abs(step["volume_level"] - 0.4) < 0.001
+
+
+@pytest.mark.asyncio
+async def test_runner_injects_ma_player_into_volume_up():
+    """volume_up step gets the satellite MA player injected just like stop/pause."""
+    ha = _make_ha_runner()
+    ollama = _make_ollama_returning(_plan_with_service("volume_up"))
+    ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
+
+    with patch("pipeline.runner.execute") as mock_exec:
+        mock_exec.return_value = "Volume up."
+        await run_pipeline("louder", ha, ollama, ma=ma, satellite="respeaker_lite")
+
+    called_steps = mock_exec.call_args.kwargs["steps"]
+    assert called_steps[0]["entity_id"] == "media_player.respeaker_lite_media_player_2"
+
+
+@pytest.mark.asyncio
+async def test_runner_injects_ma_player_into_volume_down():
+    ha = _make_ha_runner()
+    ollama = _make_ollama_returning(_plan_with_service("volume_down"))
+    ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
+
+    with patch("pipeline.runner.execute") as mock_exec:
+        mock_exec.return_value = "Volume down."
+        await run_pipeline("quieter", ha, ollama, ma=ma, satellite="respeaker_lite")
+
+    called_steps = mock_exec.call_args.kwargs["steps"]
+    assert called_steps[0]["entity_id"] == "media_player.respeaker_lite_media_player_2"
 

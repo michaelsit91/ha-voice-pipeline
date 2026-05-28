@@ -11,7 +11,7 @@ Run:
 Thresholds are stored in baseline.json. Update them after any intentional architectural
 change by running: python -m pytest tests/test_latency.py -v -s --update-baseline
 """
-import json, os, time, urllib.request, pytest
+import asyncio, json, os, time, urllib.request, pytest
 from pathlib import Path
 
 CONTAINER_URL = os.getenv("PIPELINE_URL", "http://192.168.68.250:18795")
@@ -39,6 +39,39 @@ def _call_pipeline(text: str) -> tuple[float, str]:
 
 def _load_baseline() -> dict:
     return json.loads((Path(__file__).parent / "baseline.json").read_text())
+
+@pytest.fixture(scope="session", autouse=True)
+def restore_lights_after_latency_suite(ha, event_loop):
+    """Snapshot all light entity states before the latency suite runs and restore after.
+
+    The latency commands ("turn on the kitchen light", "turn off all living room lights")
+    mutate live HA state.  This fixture ensures the home is back to its original state
+    once the whole latency session completes.
+    """
+    light_states: dict[str, str] = {}
+
+    async def _snapshot() -> None:
+        entities = await ha.get_entities()
+        for e in entities:
+            if e["entity_id"].startswith("light."):
+                try:
+                    s = await ha.get_state(e["entity_id"])
+                    light_states[e["entity_id"]] = s["state"]
+                except Exception:
+                    pass
+
+    async def _restore() -> None:
+        for eid, state in light_states.items():
+            svc = "turn_on" if state == "on" else "turn_off"
+            try:
+                await ha.call_service("light", svc, entity_id=eid)
+            except Exception:
+                pass
+
+    event_loop.run_until_complete(_snapshot())
+    yield
+    event_loop.run_until_complete(_restore())
+
 
 @pytest.fixture(scope="session", autouse=True)
 def warmup_pipeline():

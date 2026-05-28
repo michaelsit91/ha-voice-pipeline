@@ -28,13 +28,14 @@ _RESPONSE_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "domain":     {"type": "string"},
-                    "service":    {"type": "string"},
-                    "entity_id":  {"type": "string"},
-                    "area_id":    {"type": "string"},
-                    "query":      {"type": "string"},
-                    "artist":     {"type": "string"},
-                    "media_type": {"type": "string"},
+                    "domain":        {"type": "string"},
+                    "service":       {"type": "string"},
+                    "entity_id":     {"type": "string"},
+                    "area_id":       {"type": "string"},
+                    "query":         {"type": "string"},
+                    "artist":        {"type": "string"},
+                    "media_type":    {"type": "string"},
+                    "volume_level":  {"type": "number"},
                 },
                 "required": ["domain", "service"],
             },
@@ -106,6 +107,14 @@ MUSIC CONTROL COMMANDS:
 - ok_response: "Music stopped." for stop; "Paused." for pause.
 - already_response: "" (no already-state applies for stop/pause).
 
+VOLUME COMMANDS:
+- "volume up" / "louder" / "turn it up" / "a bit louder" → emit ONE step: domain=media_player, service=volume_up.
+- "volume down" / "quieter" / "turn it down" / "lower the volume" → emit ONE step: domain=media_player, service=volume_down.
+- "set volume to X%" / "volume X percent" / "X percent volume" → emit ONE step: domain=media_player, service=volume_set, volume_level=X/100 (float 0.0–1.0).
+- entity_id: use the media_player entity with mass_player_type player from the Devices list.
+- ok_response: "Volume up." / "Volume down." / "Volume set to X%."
+- already_response: "" (no already-state applies for volume commands).
+
 --- EXAMPLES ---
 
 Devices: light.office_light,Office Light,on | fan.living_room_fan,Living Room Fan,off
@@ -144,6 +153,15 @@ Transcript: stop the music
 
 Transcript: pause
 {"corrected":"pause","intent":"action","steps":[{"domain":"media_player","service":"media_pause","entity_id":"media_player.respeaker_lite_media_player_2"}],"ok_response":"Paused.","already_response":"","fail_response":"Sorry, I couldn't pause the music."}
+
+Transcript: louder
+{"corrected":"louder","intent":"action","steps":[{"domain":"media_player","service":"volume_up","entity_id":"media_player.respeaker_lite_media_player_2"}],"ok_response":"Volume up.","already_response":"","fail_response":"Sorry, I couldn't raise the volume."}
+
+Transcript: turn the volume down
+{"corrected":"turn the volume down","intent":"action","steps":[{"domain":"media_player","service":"volume_down","entity_id":"media_player.respeaker_lite_media_player_2"}],"ok_response":"Volume down.","already_response":"","fail_response":"Sorry, I couldn't lower the volume."}
+
+Transcript: set volume to 40 percent
+{"corrected":"set volume to 40%","intent":"action","steps":[{"domain":"media_player","service":"volume_set","entity_id":"media_player.respeaker_lite_media_player_2","volume_level":0.4}],"ok_response":"Volume set to 40%.","already_response":"","fail_response":"Sorry, I couldn't set the volume."}
 """
 
 _STOP_WORDS = {"the", "a", "an", "is", "on", "off", "all", "are", "in", "turn",

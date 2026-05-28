@@ -15,12 +15,19 @@ _PARTIAL_SYSTEM = (
 )
 
 
+# Step keys that are routing metadata, not HA service data.
+_STEP_META_KEYS = frozenset({"domain", "service", "entity_id", "area_id",
+                              "query", "artist", "media_type"})
+
+
 async def _run_step(step: dict, ha: HAClient) -> dict:
     """Execute one step and return a result dict with outcome."""
     domain    = step["domain"]
     service   = step["service"]
     entity_id = step.get("entity_id")
     area_id   = step.get("area_id")
+    # Extra keys (e.g. volume_level, brightness_pct) are forwarded to HA as service data.
+    extra     = {k: v for k, v in step.items() if k not in _STEP_META_KEYS}
 
     # For get_state queries, just read and return
     if service == "get_state" and isinstance(entity_id, str):
@@ -39,9 +46,9 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
             pass
 
     # Execute
-    log.info("EXEC | %s.%s entity=%s area=%s", domain, service, entity_id, area_id)
+    log.info("EXEC | %s.%s entity=%s area=%s extra=%s", domain, service, entity_id, area_id, extra)
     try:
-        await ha.call_service(domain, service, entity_id=entity_id, area_id=area_id)
+        await ha.call_service(domain, service, entity_id=entity_id, area_id=area_id, **extra)
     except Exception as e:
         log.warning("EXEC | FAILED %s.%s: %s", domain, service, e)
         return {"entity_id": entity_id or area_id, "outcome": "failed", "error": str(e)}
