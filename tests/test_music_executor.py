@@ -1,6 +1,6 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from pipeline.agents.executor import _run_music_step, execute
+from unittest.mock import AsyncMock, MagicMock, patch, call
+from pipeline.agents.executor import _run_music_step, _run_volume_step, execute, _VOLUME_STEP
 from pipeline.music_assistant_client import MusicAssistantClient
 
 
@@ -134,6 +134,90 @@ async def test_music_step_no_artist_in_result_omits_by():
 
     assert result == "Playing Chill Vibes."
     assert " by " not in result
+
+
+# ── _run_volume_step: 10% steps via volume_set ───────────────────────────────
+
+def _make_ha_with_volume(current_volume: float) -> MagicMock:
+    ha = MagicMock()
+    ha.get_state = AsyncMock(return_value={
+        "entity_id": "media_player.respeaker",
+        "state": "playing",
+        "attributes": {"volume_level": current_volume},
+    })
+    ha.call_service = AsyncMock(return_value={})
+    return ha
+
+
+@pytest.mark.asyncio
+async def test_volume_up_adds_10_percent():
+    ha = _make_ha_with_volume(0.49)
+    result = await _run_volume_step(ha, "media_player.respeaker", "volume_up")
+
+    assert result["outcome"] == "success"
+    ha.call_service.assert_awaited_once_with(
+        "media_player", "volume_set",
+        entity_id="media_player.respeaker",
+        volume_level=0.59,
+    )
+
+
+@pytest.mark.asyncio
+async def test_volume_down_subtracts_10_percent():
+    ha = _make_ha_with_volume(0.49)
+    result = await _run_volume_step(ha, "media_player.respeaker", "volume_down")
+
+    assert result["outcome"] == "success"
+    ha.call_service.assert_awaited_once_with(
+        "media_player", "volume_set",
+        entity_id="media_player.respeaker",
+        volume_level=0.39,
+    )
+
+
+@pytest.mark.asyncio
+async def test_volume_up_clamps_at_100_percent():
+    ha = _make_ha_with_volume(0.95)
+    await _run_volume_step(ha, "media_player.respeaker", "volume_up")
+
+    _, kwargs = ha.call_service.call_args
+    assert kwargs["volume_level"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_volume_down_clamps_at_0_percent():
+    ha = _make_ha_with_volume(0.05)
+    await _run_volume_step(ha, "media_player.respeaker", "volume_down")
+
+    _, kwargs = ha.call_service.call_args
+    assert kwargs["volume_level"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_volume_step_returns_failed_on_ha_error():
+    ha = MagicMock()
+    ha.get_state = AsyncMock(side_effect=Exception("HA down"))
+    result = await _run_volume_step(ha, "media_player.respeaker", "volume_up")
+    assert result["outcome"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_run_step_routes_volume_up_through_volume_step():
+    """_run_step dispatches volume_up to _run_volume_step, not raw HA call."""
+    from pipeline.agents.executor import _run_step
+    ha = _make_ha_with_volume(0.5)
+
+    result = await _run_step(
+        {"domain": "media_player", "service": "volume_up",
+         "entity_id": "media_player.respeaker"},
+        ha,
+    )
+
+    assert result["outcome"] == "success"
+    # Must call volume_set, not volume_up
+    args, kwargs = ha.call_service.call_args
+    assert args[1] == "volume_set"
+    assert kwargs["volume_level"] == pytest.approx(0.6)
 
 
 # ── execute() branches music steps ───────────────────────────────────────────

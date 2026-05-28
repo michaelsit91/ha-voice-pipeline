@@ -19,6 +19,35 @@ _PARTIAL_SYSTEM = (
 _STEP_META_KEYS = frozenset({"domain", "service", "entity_id", "area_id",
                               "query", "artist", "media_type"})
 
+# Volume step size for "louder" / "quieter" commands.
+_VOLUME_STEP = 0.10
+
+
+async def _run_volume_step(
+    ha: HAClient,
+    entity_id: str,
+    direction: str,  # "volume_up" | "volume_down"
+) -> dict:
+    """Implement volume_up/down as a precise ±10% volume_set call.
+
+    Reading the current volume from HA and computing the new level ourselves
+    gives deterministic 10% steps regardless of the integration's own default.
+    """
+    try:
+        state = await ha.get_state(entity_id)
+        current: float = state["attributes"].get("volume_level", 0.5)
+        delta = _VOLUME_STEP if direction == "volume_up" else -_VOLUME_STEP
+        new_level = round(max(0.0, min(1.0, current + delta)), 2)
+        await ha.call_service("media_player", "volume_set",
+                              entity_id=entity_id, volume_level=new_level)
+        log.info("EXEC | volume %s: %.0f%% → %.0f%%",
+                 direction, current * 100, new_level * 100)
+        return {"entity_id": entity_id, "outcome": "success",
+                "state_before": str(current), "state_after": str(new_level)}
+    except Exception as e:
+        log.warning("EXEC | FAILED volume step: %s", e)
+        return {"entity_id": entity_id, "outcome": "failed", "error": str(e)}
+
 
 async def _run_step(step: dict, ha: HAClient) -> dict:
     """Execute one step and return a result dict with outcome."""
@@ -28,6 +57,10 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
     area_id   = step.get("area_id")
     # Extra keys (e.g. volume_level, brightness_pct) are forwarded to HA as service data.
     extra     = {k: v for k, v in step.items() if k not in _STEP_META_KEYS}
+
+    # volume_up/down → precise 10% steps via volume_set
+    if service in ("volume_up", "volume_down") and isinstance(entity_id, str):
+        return await _run_volume_step(ha, entity_id, service)
 
     # For get_state queries, just read and return
     if service == "get_state" and isinstance(entity_id, str):
