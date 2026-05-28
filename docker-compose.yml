@@ -8,6 +8,10 @@ services:
       - "18795:18795"
     env_file:
       - config.env
+    volumes:
+      # MA settings (read-write) for Spotify Connect sync — decrypts refresh token and
+      # writes rotated tokens back so MA's token chain stays valid after our refresh.
+      - /portainer/Files/AppData/Config/music-assistant/data:/ma-data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

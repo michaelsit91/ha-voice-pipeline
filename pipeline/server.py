@@ -6,6 +6,7 @@ from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.music_assistant_client import MusicAssistantClient
 from pipeline.runner import run_pipeline
+from pipeline.spotify_connect_sync import SpotifyConnectSync
 
 # ── Logging with local timezone ──────────────────────────────────────────────
 _TZ = timezone(timedelta(hours=int(os.getenv("TZ_OFFSET_HOURS", "0"))))
@@ -60,6 +61,18 @@ _ma = MusicAssistantClient(
     os.getenv("MA_CONFIG_ENTRY_ID", ""),
 )
 
+# Optional: Spotify Connect sync — bridges MA queue playback to the phone's Spotify app.
+# Reads MA's encrypted Spotify refresh token from settings.json; disabled if path not set.
+_spotify_sync: SpotifyConnectSync | None = None
+_ma_settings = os.getenv("MA_SETTINGS_JSON", "")
+_librespot_name = os.getenv("LIBRESPOT_DEVICE_NAME", "ReSpeaker Lite")
+if _ma_settings:
+    try:
+        _spotify_sync = SpotifyConnectSync(_ma_settings, _librespot_name)
+        log.info("SPOTIFY_SYNC | enabled (device=%r, settings=%s)", _librespot_name, _ma_settings)
+    except Exception as e:
+        log.warning("SPOTIFY_SYNC | disabled — could not init: %s", e)
+
 # Validate required environment variables at startup
 if not os.getenv("HA_URL"):
     raise RuntimeError("HA_URL environment variable is required")
@@ -104,7 +117,11 @@ async def chat_completions(request: Request):
     log.info("IN  | %r", transcript)
     satellite = request.query_params.get("satellite")
     try:
-        text = await run_pipeline(transcript, _ha, _ollama, ma=_ma, satellite=satellite)
+        text = await run_pipeline(
+            transcript, _ha, _ollama,
+            ma=_ma, satellite=satellite,
+            spotify_sync=_spotify_sync,
+        )
     finally:
         _pipeline_busy = False
     log.info("OUT | %.2fs | %r", time.perf_counter() - t0, text)

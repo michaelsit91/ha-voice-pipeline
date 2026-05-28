@@ -3,6 +3,7 @@ from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.agents.planner import plan, _HESITATION_PATTERNS
 from pipeline.agents.executor import execute
+from pipeline.spotify_connect_sync import SpotifyConnectSync
 
 log = logging.getLogger("pipeline")
 
@@ -93,6 +94,7 @@ async def run_pipeline(
     ollama: OllamaClient,
     ma=None,
     satellite: str | None = None,
+    spotify_sync: SpotifyConnectSync | None = None,
 ) -> str:
     # Hesitation/cancellation check — zero latency, no HA or Ollama calls needed
     if _HESITATION_PATTERNS.search(transcript):
@@ -133,4 +135,5 @@ async def run_pipeline(
         already_response=planned.get("already_response", ""),
         fail_response=planned.get("fail_response", ""),
         ma=ma,
+        spotify_sync=spotify_sync,
     )

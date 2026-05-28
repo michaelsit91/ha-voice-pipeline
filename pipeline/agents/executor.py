@@ -2,6 +2,7 @@ import asyncio, json, logging, os
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.music_assistant_client import MusicAssistantClient
+from pipeline.spotify_connect_sync import SpotifyConnectSync, extract_spotify_track_id
 
 log = logging.getLogger("pipeline")
 
@@ -64,6 +65,7 @@ async def _run_music_step(
     step: dict,
     ha: HAClient,
     ma: MusicAssistantClient,
+    spotify_sync: SpotifyConnectSync | None = None,
 ) -> str:
     """Execute one music_assistant.play_media step: search then play."""
     query      = step.get("query", "")
@@ -99,6 +101,13 @@ async def _run_music_step(
         log.warning("MUSIC | play_media error: %s", e)
         return "Sorry, I couldn't play that right now."
 
+    # Fire-and-forget: sync to Spotify Connect so the phone shows what's playing
+    if spotify_sync is not None and media_type == "track":
+        track_id = extract_spotify_track_id(uri)
+        if track_id:
+            asyncio.create_task(spotify_sync.schedule_sync(track_id))
+            log.debug("SPOTIFY_SYNC | scheduled sync for track %s", track_id)
+
     if artist_name:
         return f"Playing {track_name} by {artist_name}."
     return f"Playing {track_name}."
@@ -113,13 +122,14 @@ async def execute(
     already_response: str = "",
     fail_response: str = "",
     ma: MusicAssistantClient | None = None,
+    spotify_sync: SpotifyConnectSync | None = None,
 ) -> str:
     # Music steps are handled separately — branch before HA execution
     music_steps = [s for s in steps if s.get("domain") == "music_assistant"]
     if music_steps:
         if ma is None:
             return "Sorry, Music Assistant is not configured."
-        return await _run_music_step(music_steps[0], ha, ma)
+        return await _run_music_step(music_steps[0], ha, ma, spotify_sync)
 
     # Run all HA steps in parallel
     results = await asyncio.gather(*[_run_step(s, ha) for s in steps])
