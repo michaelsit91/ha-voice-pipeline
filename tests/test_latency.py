@@ -14,7 +14,7 @@ change by running: python -m pytest tests/test_latency.py -v -s --update-baselin
 import asyncio, json, os, time, urllib.request, pytest
 from pathlib import Path
 
-CONTAINER_URL = os.getenv("PIPELINE_URL", "http://192.168.68.250:18795")
+CONTAINER_URL = os.getenv("PIPELINE_URL", "http://homeassistant.local:18795")
 RUNS = 3
 
 COMMANDS = {

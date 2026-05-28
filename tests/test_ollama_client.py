@@ -1,7 +1,7 @@
 import os, pytest
 from pipeline.ollama_client import OllamaClient
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.68.250:11434")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://homeassistant.local:11434")
 MODEL      = os.getenv("MODEL", "default")
 
 @pytest.fixture(scope="module")

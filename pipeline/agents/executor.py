@@ -100,11 +100,22 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
         except Exception as e:
             return {"entity_id": entity_id, "outcome": "failed", "error": str(e)}
 
-    # Capture state before (only for single-entity — area/list can't be diffed)
-    state_before = None
+    # Capture state before execution (string or list entity_id; area_id excluded —
+    # HA exposes no per-area state endpoint).
+    states_before: dict[str, str] = {}
     if isinstance(entity_id, str) and entity_id:
         try:
-            state_before = (await ha.get_state(entity_id))["state"]
+            states_before[entity_id] = (await ha.get_state(entity_id))["state"]
+        except Exception:
+            pass
+    elif isinstance(entity_id, list) and entity_id:
+        try:
+            pre = await asyncio.gather(
+                *[ha.get_state(eid) for eid in entity_id], return_exceptions=True
+            )
+            for eid, r in zip(entity_id, pre):
+                if not isinstance(r, Exception):
+                    states_before[eid] = r["state"]
         except Exception:
             pass
 
@@ -116,19 +127,46 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
         log.warning("EXEC | FAILED %s.%s: %s", domain, service, e)
         return {"entity_id": entity_id or area_id, "outcome": "failed", "error": str(e)}
 
-    # Wait for Zigbee/Z-Wave propagation, then read back state
-    if isinstance(entity_id, str) and entity_id:
-        await asyncio.sleep(_ZIGBEE_SETTLE_S)
-        try:
-            state_after = (await ha.get_state(entity_id))["state"]
-            outcome = "success" if state_after != state_before else "already"
-            return {"entity_id": entity_id, "outcome": outcome,
-                    "state_before": state_before, "state_after": state_after}
-        except Exception:
-            pass
+    # Area calls: HA has no per-area state endpoint, nothing to diff
+    if area_id:
+        return {"entity_id": area_id, "outcome": "success"}
 
-    # Area or list call — no per-entity state diff available
-    return {"entity_id": entity_id or area_id, "outcome": "success"}
+    # Determine which entity IDs to read back
+    target_ids: list[str] = (
+        [entity_id] if isinstance(entity_id, str) and entity_id
+        else entity_id if isinstance(entity_id, list) and entity_id
+        else []
+    )
+    if not target_ids:
+        return {"entity_id": entity_id, "outcome": "success"}
+
+    # Wait for Zigbee/Z-Wave propagation, then read back state
+    await asyncio.sleep(_ZIGBEE_SETTLE_S)
+    try:
+        post = await asyncio.gather(
+            *[ha.get_state(eid) for eid in target_ids], return_exceptions=True
+        )
+        states_after = {eid: r["state"] for eid, r in zip(target_ids, post)
+                        if not isinstance(r, Exception)}
+    except Exception:
+        return {"entity_id": entity_id, "outcome": "success"}
+
+    if not states_after:
+        return {"entity_id": entity_id, "outcome": "success"}
+
+    # "already" if every entity with a before/after reading was unchanged
+    comparable = [eid for eid in target_ids
+                  if eid in states_before and eid in states_after]
+    all_unchanged = bool(comparable) and all(
+        states_before[eid] == states_after[eid] for eid in comparable
+    )
+    outcome = "already" if all_unchanged else "success"
+
+    if isinstance(entity_id, str):
+        return {"entity_id": entity_id, "outcome": outcome,
+                "state_before": states_before.get(entity_id),
+                "state_after": states_after.get(entity_id)}
+    return {"entity_id": entity_id, "outcome": outcome}
 
 
 async def _run_music_step(

@@ -11,7 +11,8 @@ services:
     volumes:
       # MA settings (read-write) for Spotify Connect sync — decrypts refresh token and
       # writes rotated tokens back so MA's token chain stays valid after our refresh.
-      - /portainer/Files/AppData/Config/music-assistant/data:/ma-data
+      # Set MA_DATA_PATH in config.env to your Music Assistant data directory.
+      - ${MA_DATA_PATH:-/tmp/ma-data-disabled}:/ma-data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

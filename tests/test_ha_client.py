@@ -2,7 +2,7 @@ import os
 import pytest
 from pipeline.ha_client import HAClient
 
-HA_URL = os.getenv("HA_URL", "http://192.168.68.250:8123")
+HA_URL = os.getenv("HA_URL", "http://homeassistant.local:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 CONTROLLABLE_DOMAINS = {"light", "switch", "fan", "media_player", "climate", "cover", "input_boolean"}
 

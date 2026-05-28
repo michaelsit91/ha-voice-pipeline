@@ -46,7 +46,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import aiohttp
+import httpx
 
 log = logging.getLogger("pipeline")
 
@@ -85,15 +85,15 @@ class SpotifyConnectSync:
         self._refresh_token: str | None = None
         self._access_token: str | None = None
         self._token_expires_at: float = 0.0
-        # Cached aiohttp session — created on first use, closed on GC
-        self._session: aiohttp.ClientSession | None = None
+        # Cached httpx client — created on first use
+        self._client: httpx.AsyncClient | None = None
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _session_or_create(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+    def _client_or_create(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient()
+        return self._client
 
     def _fernet_and_sp_key(self) -> tuple[Any, dict[str, Any], str, str]:
         """Return (Fernet, settings_dict, sp_provider_key, server_id).
@@ -176,21 +176,20 @@ class SpotifyConnectSync:
         if self._refresh_token is None:
             self._refresh_token = self._load_refresh_token()
 
-        session = self._session_or_create()
-        async with session.post(
+        client = self._client_or_create()
+        r = await client.post(
             _SPOTIFY_TOKEN_URL,
             data={
                 "grant_type": "refresh_token",
                 "refresh_token": self._refresh_token,
                 "client_id": _MA_CLIENT_ID,
             },
-        ) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(
-                    f"Spotify token refresh failed ({resp.status}): {body[:200]}"
-                )
-            data: dict[str, Any] = await resp.json()
+        )
+        if r.status_code != 200:
+            raise RuntimeError(
+                f"Spotify token refresh failed ({r.status_code}): {r.text[:200]}"
+            )
+        data: dict[str, Any] = r.json()
 
         self._access_token = data["access_token"]
         self._token_expires_at = time.time() + data.get("expires_in", 3600)
@@ -206,15 +205,15 @@ class SpotifyConnectSync:
     async def _get_device_id(self) -> str | None:
         """Return the Spotify device ID for the configured librespot instance."""
         token = await self._get_access_token()
-        session = self._session_or_create()
-        async with session.get(
+        client = self._client_or_create()
+        r = await client.get(
             _SPOTIFY_DEVICES_URL,
             headers={"Authorization": f"Bearer {token}"},
-        ) as resp:
-            if resp.status != 200:
-                log.warning("SPOTIFY_SYNC | devices fetch failed: HTTP %s", resp.status)
-                return None
-            data = await resp.json()
+        )
+        if r.status_code != 200:
+            log.warning("SPOTIFY_SYNC | devices fetch failed: HTTP %s", r.status_code)
+            return None
+        data = r.json()
 
         for device in data.get("devices", []):
             if device.get("name") == self._device_name:
@@ -246,22 +245,20 @@ class SpotifyConnectSync:
 
             token = await self._get_access_token()
             track_uri = f"spotify:track:{spotify_track_id}"
-            session = self._session_or_create()
-
-            async with session.put(
+            client = self._client_or_create()
+            r = await client.put(
                 f"{_SPOTIFY_PLAY_URL}?device_id={device_id}",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                 },
                 json={"uris": [track_uri]},
-            ) as resp:
-                if resp.status not in (200, 204):
-                    body = await resp.text()
-                    log.warning(
-                        "SPOTIFY_SYNC | play failed HTTP %s: %s", resp.status, body[:200]
-                    )
-                    return False
+            )
+            if r.status_code not in (200, 204):
+                log.warning(
+                    "SPOTIFY_SYNC | play failed HTTP %s: %s", r.status_code, r.text[:200]
+                )
+                return False
 
             log.info(
                 "SPOTIFY_SYNC | %s → %r (device %s)",

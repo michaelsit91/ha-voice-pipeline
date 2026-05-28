@@ -3,9 +3,9 @@ from pipeline.runner import run_pipeline
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 
-HA_URL     = os.getenv("HA_URL",     "http://192.168.68.250:8123")
+HA_URL     = os.getenv("HA_URL",     "http://homeassistant.local:8123")
 HA_TOKEN   = os.getenv("HA_TOKEN",   "")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://192.168.68.250:11434")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://homeassistant.local:11434")
 MODEL      = os.getenv("MODEL",      "default")
 
 @pytest.fixture(scope="module")

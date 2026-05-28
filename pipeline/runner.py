@@ -40,8 +40,9 @@ def _filter_entities(entities: list[dict], transcript: str) -> list[dict]:
     partial = [e for e, s in scored if s >= 1]
     if partial:
         return partial[:15]
-    # Nothing matches (gibberish input): return top 15 by score as fallback
-    return [e for e, _ in scored[:15]]
+    # Nothing keyword-matched — likely a broadcast command ("all fans", "everything off")
+    # or gibberish. Return the full list so the planner can see all devices.
+    return entities
 
 async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient) -> str | None:
     """Skip executor LLM for state queries — saves one Ollama round-trip.

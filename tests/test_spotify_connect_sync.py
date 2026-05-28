@@ -89,57 +89,45 @@ def sync_with_token(tmp_path):
     return sync
 
 
+def _mock_httpx_response(status_code: int, json_data=None, text: str = "") -> MagicMock:
+    """Build a mock httpx.Response with sync json() and text property."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json = MagicMock(return_value=json_data or {})
+    resp.text = text
+    return resp
+
+
 @pytest.mark.asyncio
 async def test_sync_track_calls_spotify_play(sync_with_token):
     """sync_track finds the device and calls PUT /v1/me/player/play."""
-    mock_session = MagicMock()
-    mock_devices_resp = AsyncMock()
-    mock_devices_resp.status = 200
-    mock_devices_resp.json = AsyncMock(return_value={
-        "devices": [{"name": "TestDevice", "id": "device-abc123"}]
-    })
-
-    mock_play_resp = AsyncMock()
-    mock_play_resp.status = 204
-
-    # aiohttp session as async context manager
-    mock_session.get = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_devices_resp),
-        __aexit__=AsyncMock(return_value=False),
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(
+        200, {"devices": [{"name": "TestDevice", "id": "device-abc123"}]}
     ))
-    mock_session.put = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_play_resp),
-        __aexit__=AsyncMock(return_value=False),
-    ))
-    mock_session.closed = False
-    sync_with_token._session = mock_session
+    mock_client.put = AsyncMock(return_value=_mock_httpx_response(204))
+    sync_with_token._client = mock_client
 
     result = await sync_with_token.sync_track("0VjIjW4GlUZAMYd2vXMi3b")
 
     assert result is True
     # PUT was called with the correct URI and device_id
-    put_call_kwargs = mock_session.put.call_args
-    assert "device_id=device-abc123" in put_call_kwargs[0][0]
-    called_json = put_call_kwargs[1]["json"]
+    put_call_args = mock_client.put.call_args
+    assert "device_id=device-abc123" in put_call_args[0][0]
+    called_json = put_call_args[1]["json"]
     assert called_json["uris"] == ["spotify:track:0VjIjW4GlUZAMYd2vXMi3b"]
 
 
 @pytest.mark.asyncio
 async def test_sync_track_returns_false_when_device_not_found(sync_with_token):
     """sync_track returns False gracefully when librespot device isn't listed."""
-    mock_session = MagicMock()
-    mock_devices_resp = AsyncMock()
-    mock_devices_resp.status = 200
-    mock_devices_resp.json = AsyncMock(return_value={
-        "devices": [{"name": "SomeOtherDevice", "id": "other-id"}]
-    })
-
-    mock_session.get = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_devices_resp),
-        __aexit__=AsyncMock(return_value=False),
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response(
+        200, {"devices": [{"name": "SomeOtherDevice", "id": "other-id"}]}
     ))
-    mock_session.closed = False
-    sync_with_token._session = mock_session
+    sync_with_token._client = mock_client
 
     result = await sync_with_token.sync_track("0VjIjW4GlUZAMYd2vXMi3b")
     assert result is False
@@ -148,10 +136,10 @@ async def test_sync_track_returns_false_when_device_not_found(sync_with_token):
 @pytest.mark.asyncio
 async def test_sync_track_returns_false_on_api_error(sync_with_token):
     """sync_track returns False (no exception) when the Spotify API call fails."""
-    mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=Exception("network error"))
-    mock_session.closed = False
-    sync_with_token._session = mock_session
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.get = AsyncMock(side_effect=Exception("network error"))
+    sync_with_token._client = mock_client
 
     result = await sync_with_token.sync_track("0VjIjW4GlUZAMYd2vXMi3b")
     assert result is False
@@ -215,21 +203,14 @@ async def test_get_access_token_writes_back_rotated_token(tmp_path):
     sync = SpotifyConnectSync(str(settings_path), "TestDevice")
     sync._refresh_token = "original_refresh"  # skip file read
 
-    mock_resp = AsyncMock()
-    mock_resp.status = 200
-    mock_resp.json = AsyncMock(return_value={
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.post = AsyncMock(return_value=_mock_httpx_response(200, {
         "access_token": "new_access",
         "expires_in": 3600,
         "refresh_token": "rotated_refresh",
-    })
-
-    mock_session = MagicMock()
-    mock_session.post = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_resp),
-        __aexit__=AsyncMock(return_value=False),
-    ))
-    mock_session.closed = False
-    sync._session = mock_session
+    }))
+    sync._client = mock_client
 
     token = await sync._get_access_token()
     assert token == "new_access"
@@ -249,21 +230,14 @@ async def test_get_access_token_no_write_when_no_rotation(tmp_path):
     sync = SpotifyConnectSync(str(settings_path), "TestDevice")
     sync._refresh_token = "original_refresh"
 
-    mock_resp = AsyncMock()
-    mock_resp.status = 200
-    mock_resp.json = AsyncMock(return_value={
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.post = AsyncMock(return_value=_mock_httpx_response(200, {
         "access_token": "new_access",
         "expires_in": 3600,
         # no refresh_token in response
-    })
-
-    mock_session = MagicMock()
-    mock_session.post = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_resp),
-        __aexit__=AsyncMock(return_value=False),
-    ))
-    mock_session.closed = False
-    sync._session = mock_session
+    }))
+    sync._client = mock_client
 
     await sync._get_access_token()
     # settings.json should not have been touched

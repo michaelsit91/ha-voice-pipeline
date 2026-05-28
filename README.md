@@ -79,17 +79,15 @@ Requirements:
 - Music Assistant with the Spotify provider configured
 - A Librespot device (e.g. ReSpeaker Lite running Wyoming satellite)
 
-Mount MA's data directory and set the env vars:
-
-```yaml
-# docker-compose.yml volumes section
-- /path/to/music-assistant/data:/ma-data
-```
+Set the env vars in `config.env`:
 
 ```env
+MA_DATA_PATH=/path/to/music-assistant/data
 MA_SETTINGS_JSON=/ma-data/settings.json
 LIBRESPOT_DEVICE_NAME=ReSpeaker Lite
 ```
+
+`MA_DATA_PATH` is the host-side path to MA's data directory. It is mounted into the container at `/ma-data` automatically via `docker-compose.yml`.
 
 ---
 

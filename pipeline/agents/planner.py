@@ -30,7 +30,7 @@ _RESPONSE_SCHEMA = {
                 "properties": {
                     "domain":        {"type": "string"},
                     "service":       {"type": "string"},
-                    "entity_id":     {"type": "string"},
+                    "entity_id":     {"anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
                     "area_id":       {"type": "string"},
                     "query":         {"type": "string"},
                     "artist":        {"type": "string"},
@@ -138,6 +138,15 @@ Transcript: turn off all living room lights and the office fan
 Transcript: dim the kitchen light to fifty percent
 {"corrected":"dim the kitchen light to 50%","intent":"action","steps":[{"domain":"light","service":"turn_on","entity_id":"light.kitchen_light","brightness_pct":50}],"ok_response":"Kitchen light dimmed to 50%.","fail_response":"Sorry, I couldn't dim the kitchen light."}
 
+Devices: fan.living_room_fan,Living Room Fan,on | fan.master_bedroom_fan,Master Bedroom Fan,off | fan.office_fan,Office Fan,on | fan.guest_room_fan,Guest Room Fan,off
+Areas: living_room,Living Room | master_bedroom,Master Bedroom | office,Office | guest_room,Guest Room
+
+Transcript: toggle all the fans
+{"corrected":"toggle all the fans","intent":"action","steps":[{"domain":"fan","service":"toggle","entity_id":["fan.living_room_fan","fan.master_bedroom_fan","fan.office_fan","fan.guest_room_fan"]}],"ok_response":"All fans toggled.","already_response":"","fail_response":"Sorry, I couldn't toggle the fans."}
+
+Transcript: turn off all the fans
+{"corrected":"turn off all the fans","intent":"action","steps":[{"domain":"fan","service":"turn_off","entity_id":["fan.living_room_fan","fan.master_bedroom_fan","fan.office_fan","fan.guest_room_fan"]}],"ok_response":"All fans are now off.","already_response":"All fans are already off.","fail_response":"Sorry, I couldn't turn off the fans."}
+
 Devices: media_player.respeaker_lite_media_player_2,Spotify,playing
 Transcript: play blinding lights
 {"corrected":"play Blinding Lights","intent":"action","steps":[{"domain":"music_assistant","service":"play_media","entity_id":"media_player.respeaker_lite_media_player_2","query":"Blinding Lights","media_type":"track"}],"ok_response":"Playing Blinding Lights.","already_response":"","fail_response":"Sorry, I couldn't play that."}
@@ -164,41 +173,13 @@ Transcript: set volume to 40 percent
 {"corrected":"set volume to 40%","intent":"action","steps":[{"domain":"media_player","service":"volume_set","entity_id":"media_player.respeaker_lite_media_player_2","volume_level":0.4}],"ok_response":"Volume set to 40%.","already_response":"","fail_response":"Sorry, I couldn't set the volume."}
 """
 
-_STOP_WORDS = {"the", "a", "an", "is", "on", "off", "all", "are", "in", "turn",
-               "to", "and", "of", "my", "please", "can", "you", "me"}
-
-
-_CJK_RE = re.compile(r"[一-鿿㐀-䶿豈-﫿]")
-
-
-def _filter_entities(transcript: str, entities: list[dict], max_entities: int = 30) -> list[dict]:
-    """Return entities most likely relevant to the transcript via keyword overlap.
-    For CJK transcripts, keyword matching against English names is useless, so
-    skip filtering and return all entities (capped at max_entities)."""
-    if _CJK_RE.search(transcript):
-        return entities[:max_entities]
-
-    words = {w.lower() for w in transcript.split() if w.lower() not in _STOP_WORDS}
-    if not words:
-        return entities[:max_entities]
-
-    def score(e: dict) -> int:
-        target = (e["entity_id"] + " " + e.get("name", "")).lower()
-        return sum(1 for w in words if w in target)
-
-    scored = sorted(entities, key=score, reverse=True)
-    matched = [e for e in scored if score(e) > 0]
-    if len(matched) >= max_entities:
-        return matched[:max_entities]
-    extras = [e for e in scored if score(e) == 0]
-    return (matched + extras)[:max_entities]
-
-
-def _build_context(entities: list[dict], areas: list[dict], transcript: str = "") -> str:
+def _build_context(entities: list[dict], areas: list[dict]) -> str:
+    """Build the prompt context string from the (already-filtered) entity list.
+    Caps at 30 entities to stay within the LLM context budget; the caller
+    (runner._filter_entities) is responsible for relevance-based pre-filtering."""
     area_rows = ["area_id,name"] + [f"{a['area_id']},{a['name']}" for a in areas]
-    filtered = _filter_entities(transcript, entities) if transcript else entities
     rows = ["entity_id,name,state"]
-    for e in filtered:
+    for e in entities[:30]:
         rows.append(f"{e['entity_id']},{e['name']},{e['state']}")
     return "Areas:\n" + "\n".join(area_rows) + "\n\nDevices:\n" + "\n".join(rows)
 
@@ -279,15 +260,17 @@ def _validate_steps(steps: list[dict], entities: list[dict], areas: list[dict]) 
             continue
         key = (step.get("domain"), step.get("service"))
         eid = step.get("entity_id")
+        # Normalise eid to a flat list for consistent merging
+        new_eids: list[str] = eid if isinstance(eid, list) else ([eid] if eid is not None else [])
         if key in seen:
             existing = merged[seen[key]]
             existing_eid = existing.get("entity_id")
             if existing_eid is None:
                 merged[seen[key]] = {**existing, "entity_id": eid}
             elif isinstance(existing_eid, list):
-                merged[seen[key]] = {**existing, "entity_id": existing_eid + [eid]}
+                merged[seen[key]] = {**existing, "entity_id": existing_eid + new_eids}
             else:
-                merged[seen[key]] = {**existing, "entity_id": [existing_eid, eid]}
+                merged[seen[key]] = {**existing, "entity_id": [existing_eid] + new_eids}
         else:
             seen[key] = len(merged)
             merged.append(step)
@@ -304,7 +287,7 @@ async def plan(
     if _HESITATION_PATTERNS.search(transcript):
         return _HESITATION_RESPONSE
 
-    context = _build_context(entities, areas, transcript)
+    context = _build_context(entities, areas)
     user    = f"{context}\n\nTranscript: {transcript}"
 
     # Two attempts: first with JSON schema mode, retry on parse failure.

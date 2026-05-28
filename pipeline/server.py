@@ -1,4 +1,5 @@
 import json, logging, os, time, uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -21,30 +22,6 @@ log = logging.getLogger("pipeline")
 log.setLevel(logging.INFO)
 log.addHandler(_handler)
 log.propagate = False
-
-app = FastAPI()
-
-
-@app.on_event("startup")
-async def _startup_warmup():
-    """One-time warmup on startup. GPU clock is locked by systemd nvidia-clocks.service,
-    so no periodic keepalive needed — wyoming-voice fires AudioStart warmup per command."""
-    import httpx
-    url   = _ollama.url
-    model = _ollama.model
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            await c.post(f"{url}/api/chat",
-                         json={"model": model, "messages": [], "keep_alive": -1,
-                               "options": {"num_ctx": 8192}})
-    except Exception:
-        pass
-    # Discover satellite → MA player map
-    try:
-        await _ma.discover()
-        log.info("MUSIC | satellite_map: %s", _ma._satellite_map)
-    except Exception as e:
-        log.warning("MUSIC | discovery failed at startup: %s", e)
 
 _ha = HAClient(
     os.getenv("HA_URL", ""),
@@ -72,11 +49,34 @@ if _ma_settings:
     except Exception as e:
         log.warning("SPOTIFY_SYNC | disabled — could not init: %s", e)
 
-# Validate required environment variables at startup
-if not os.getenv("HA_URL"):
-    raise RuntimeError("HA_URL environment variable is required")
-if not os.getenv("OLLAMA_URL"):
-    raise RuntimeError("OLLAMA_URL environment variable is required")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """One-time warmup on startup. GPU clock is locked by systemd nvidia-clocks.service,
+    so no periodic keepalive needed — wyoming-voice fires AudioStart warmup per command."""
+    if not os.getenv("HA_URL"):
+        raise RuntimeError("HA_URL environment variable is required")
+    if not os.getenv("OLLAMA_URL"):
+        raise RuntimeError("OLLAMA_URL environment variable is required")
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            await c.post(f"{_ollama.url}/api/chat",
+                         json={"model": _ollama.model, "messages": [], "keep_alive": -1,
+                               "options": {"num_ctx": 8192}})
+    except Exception:
+        pass
+    # Discover satellite → MA player map
+    try:
+        await _ma.discover()
+        log.info("MUSIC | satellite_map: %s", _ma._satellite_map)
+    except Exception as e:
+        log.warning("MUSIC | discovery failed at startup: %s", e)
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
+
 
 @app.get("/health")
 async def health():
