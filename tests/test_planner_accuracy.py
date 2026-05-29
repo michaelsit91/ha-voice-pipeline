@@ -551,9 +551,7 @@ async def test_planner_case(case, ollama, ha_context):
 def _populate_known_ids(ha):
     """Fetch live entity list from HA and populate the known entity ID set."""
     global _known_ids
-    async def _fetch():
-        return await ha.get_entities()
-    entities = asyncio.run(_fetch())
+    entities = asyncio.run(ha.get_entities())
     _known_ids = {e["entity_id"] for e in entities}
     print(f"\n  [benchmark] loaded {len(_known_ids)} entity IDs from HA")
 
