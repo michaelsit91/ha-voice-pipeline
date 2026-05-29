@@ -12,12 +12,9 @@ Each test case runs RUNS=3 times (LLM is stochastic) and reports per-run and agg
 Final summary printed at end: accuracy per category and overall.
 """
 import asyncio, json, os, re, time, pytest
-from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.agents.planner import plan
 
-HA_URL     = os.getenv("HA_URL",     "http://localhost:8123")
-HA_TOKEN   = os.getenv("HA_TOKEN",   "")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 RUNS       = int(os.getenv("BENCH_RUNS", "3"))
 
@@ -482,19 +479,11 @@ CASES = [
 ]
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
-@pytest.fixture(scope="session")
-def ha():
-    return HAClient(HA_URL, HA_TOKEN)
+# ha and ha_context come from conftest.py (session-scoped).
 
 @pytest.fixture(scope="module")
 def ollama():
     return OllamaClient(OLLAMA_URL, MODEL)
-
-@pytest.fixture(scope="module")
-def ha_context(ha, event_loop):
-    entities = event_loop.run_until_complete(ha.get_entities())
-    areas    = event_loop.run_until_complete(ha.get_areas())
-    return {"entities": entities, "areas": areas}
 
 # ── Scoring ───────────────────────────────────────────────────────────────────
 _results_store: dict[str, list[dict]] = {}
@@ -559,10 +548,12 @@ async def test_planner_case(case, ollama, ha_context):
 
 # ── Known-ID loader (session-scoped, fires before any test) ──────────────────
 @pytest.fixture(scope="session", autouse=True)
-def _populate_known_ids(ha, event_loop):
+def _populate_known_ids(ha):
     """Fetch live entity list from HA and populate the known entity ID set."""
     global _known_ids
-    entities = event_loop.run_until_complete(ha.get_entities())
+    async def _fetch():
+        return await ha.get_entities()
+    entities = asyncio.run(_fetch())
     _known_ids = {e["entity_id"] for e in entities}
     print(f"\n  [benchmark] loaded {len(_known_ids)} entity IDs from HA")
 
