@@ -27,9 +27,15 @@ _ha = HAClient(
     os.getenv("HA_URL", ""),
     os.getenv("HA_TOKEN", ""),
 )
+_VRAM_MANAGER_URL = os.environ.get("VRAM_MANAGER_URL", "").rstrip("/")
+_EFFECTIVE_OLLAMA_URL = (
+    f"{_VRAM_MANAGER_URL}/ollama"
+    if _VRAM_MANAGER_URL
+    else os.environ.get("OLLAMA_URL", "")
+)
 _ollama = OllamaClient(
-    os.getenv("OLLAMA_URL", ""),
-    os.getenv("MODEL",      "default"),
+    _EFFECTIVE_OLLAMA_URL,
+    os.getenv("MODEL", "default"),
 )
 _ma = MusicAssistantClient(
     os.getenv("HA_URL",             ""),
