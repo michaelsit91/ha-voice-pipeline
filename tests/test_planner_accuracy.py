@@ -548,11 +548,10 @@ async def test_planner_case(case, ollama, ha_context):
 
 # ── Known-ID loader (session-scoped, fires before any test) ──────────────────
 @pytest.fixture(scope="session", autouse=True)
-def _populate_known_ids(ha):
-    """Fetch live entity list from HA and populate the known entity ID set."""
+def _populate_known_ids(ha_context):
+    """Populate the known entity ID set from the already-fetched ha_context."""
     global _known_ids
-    entities = asyncio.run(ha.get_entities())
-    _known_ids = {e["entity_id"] for e in entities}
+    _known_ids = {e["entity_id"] for e in ha_context["entities"]}
     print(f"\n  [benchmark] loaded {len(_known_ids)} entity IDs from HA")
 
 
