@@ -41,7 +41,7 @@ def _load_baseline() -> dict:
     return json.loads((Path(__file__).parent / "baseline.json").read_text())
 
 @pytest.fixture(scope="session", autouse=True)
-def restore_lights_after_latency_suite(ha, event_loop):
+def restore_lights_after_latency_suite(ha):
     """Snapshot all light entity states before the latency suite runs and restore after.
 
     The latency commands ("turn on the kitchen light", "turn off all living room lights")
@@ -68,9 +68,9 @@ def restore_lights_after_latency_suite(ha, event_loop):
             except Exception:
                 pass
 
-    event_loop.run_until_complete(_snapshot())
+    asyncio.run(_snapshot())
     yield
-    event_loop.run_until_complete(_restore())
+    asyncio.run(_restore())
 
 
 @pytest.fixture(scope="session", autouse=True)
