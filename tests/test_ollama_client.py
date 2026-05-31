@@ -1,5 +1,16 @@
 import os, pytest
+import httpx
 from pipeline.ollama_client import OllamaClient
+
+
+def test_ollama_client_reuses_http_client():
+    """OllamaClient._get_client() must return the same instance on repeated calls."""
+    ollama = OllamaClient("http://test:11434", "model")
+    assert ollama._client is None
+    c1 = ollama._get_client()
+    c2 = ollama._get_client()
+    assert c1 is c2
+    assert isinstance(c1, httpx.AsyncClient)
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://homeassistant.local:11434")
 MODEL      = os.getenv("MODEL", "default")

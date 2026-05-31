@@ -1,10 +1,23 @@
 import os
 import pytest
+import httpx
 from pipeline.ha_client import HAClient
 
 HA_URL = os.getenv("HA_URL", "http://homeassistant.local:8123")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 CONTROLLABLE_DOMAINS = {"light", "switch", "fan", "media_player", "climate", "cover", "input_boolean"}
+
+
+def test_ha_client_reuses_http_client():
+    """HAClient._get_client() must return the same instance on repeated calls."""
+    ha = HAClient("http://test", "token")
+    # _client is None before first use (lazy init)
+    assert ha._client is None
+    # After calling _get_client twice, same object returned (connection pooling)
+    c1 = ha._get_client()
+    c2 = ha._get_client()
+    assert c1 is c2
+    assert isinstance(c1, httpx.AsyncClient)
 
 
 @pytest.fixture(scope="module")

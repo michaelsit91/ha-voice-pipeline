@@ -1,5 +1,6 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+import httpx
+from unittest.mock import AsyncMock, MagicMock
 from pipeline.music_assistant_client import (
     MusicAssistantClient,
     _satellite_slug,
@@ -28,6 +29,15 @@ def test_physical_player_slug_ha_voice():
         "media_player.home_assistant_voice_09d0e0_media_player"
     ) == "home_assistant_voice_09d0e0"
 
+def test_ma_client_reuses_http_client():
+    """MusicAssistantClient._get_client() must return the same instance on repeated calls."""
+    ma = MusicAssistantClient("http://test", "token", "entry")
+    assert ma._client is None
+    c1 = ma._get_client()
+    c2 = ma._get_client()
+    assert c1 is c2
+    assert isinstance(c1, httpx.AsyncClient)
+
 # ── discovery ─────────────────────────────────────────────────────────────────
 
 _MOCK_STATES = [
@@ -49,23 +59,30 @@ _MOCK_STATES = [
                     "active_queue": "media_player.home_assistant_voice_09d0e0_media_player"}},
 ]
 
-def _mock_http(states):
+def _mock_http_get(states) -> AsyncMock:
     mock_resp = MagicMock()
     mock_resp.json.return_value = states
     mock_resp.raise_for_status = MagicMock()
     mock_client = AsyncMock()
+    mock_client.is_closed = False
     mock_client.get = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+def _mock_http_post(response_body) -> AsyncMock:
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = response_body
+    mock_resp.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.is_closed = False
+    mock_client.post = AsyncMock(return_value=mock_resp)
     return mock_client
 
 @pytest.mark.asyncio
 async def test_discover_maps_both_satellites():
-    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value = _mock_http(_MOCK_STATES)
-        result = await _discover_satellite_players(
-            "http://ha:8123", {"Authorization": "Bearer x"}
-        )
+    mock_client = _mock_http_get(_MOCK_STATES)
+    result = await _discover_satellite_players(
+        "http://ha:8123", {"Authorization": "Bearer x"}, mock_client
+    )
     assert result["respeaker_lite"] == "media_player.respeaker_lite_media_player_2"
     assert result["home_assistant_voice_09d0e0"] == "media_player.home_assistant_voice_media_player"
 
@@ -78,12 +95,10 @@ async def test_discover_fallback_when_active_queue_null():
         if s2["attributes"].get("mass_player_type") == "player":
             s2["attributes"]["active_queue"] = None
         states.append(s2)
-
-    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value = _mock_http(states)
-        result = await _discover_satellite_players(
-            "http://ha:8123", {"Authorization": "Bearer x"}
-        )
+    mock_client = _mock_http_get(states)
+    result = await _discover_satellite_players(
+        "http://ha:8123", {"Authorization": "Bearer x"}, mock_client
+    )
     assert result.get("respeaker_lite") == "media_player.respeaker_lite_media_player_2"
 
 # ── resolve_player ────────────────────────────────────────────────────────────
@@ -97,12 +112,12 @@ def test_resolve_player_known_slug():
     assert ma.resolve_player("respeaker_lite") == "media_player.respeaker_lite_media_player_2"
 
 def test_resolve_player_unknown_slug_falls_back_to_first():
-    ma = MusicAssistantClient("http://ha:8123", "token", "entry-id")
+    ma = MusicAssistantClient("http://ha:8123", "token", "entry-123")
     ma._satellite_map = {"respeaker_lite": "media_player.respeaker_lite_media_player_2"}
     assert ma.resolve_player("unknown") == "media_player.respeaker_lite_media_player_2"
 
 def test_resolve_player_none_falls_back_to_first():
-    ma = MusicAssistantClient("http://ha:8123", "token", "entry-id")
+    ma = MusicAssistantClient("http://ha:8123", "token", "entry-123")
     ma._satellite_map = {"respeaker_lite": "media_player.respeaker_lite_media_player_2"}
     assert ma.resolve_player(None) == "media_player.respeaker_lite_media_player_2"
 
@@ -111,16 +126,6 @@ def test_resolve_player_empty_map_returns_none():
     assert ma.resolve_player("respeaker_lite") is None
 
 # ── search ────────────────────────────────────────────────────────────────────
-
-def _mock_http_post(response_body):
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = response_body
-    mock_resp.raise_for_status = MagicMock()
-    mock_client = AsyncMock()
-    mock_client.post = AsyncMock(return_value=mock_resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    return mock_client
 
 @pytest.mark.asyncio
 async def test_search_track_returns_name_and_artist():
@@ -136,9 +141,8 @@ async def test_search_track_returns_name_and_artist():
             "artists": [], "albums": [], "playlists": [],
         }
     }
-    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value = _mock_http_post(body)
-        results = await ma.search("Blinding Lights", media_type="track")
+    ma._client = _mock_http_post(body)
+    results = await ma.search("Blinding Lights", media_type="track")
     assert len(results) == 1
     assert results[0] == {
         "uri": "spotify://track/abc123",
@@ -159,9 +163,8 @@ async def test_search_artist_uses_name_as_artist():
             "tracks": [], "albums": [], "playlists": [],
         }
     }
-    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value = _mock_http_post(body)
-        results = await ma.search("The Weeknd", media_type="artist")
+    ma._client = _mock_http_post(body)
+    results = await ma.search("The Weeknd", media_type="artist")
     assert results[0]["name"] == "The Weeknd"
     assert results[0]["artist"] == "The Weeknd"
 
@@ -173,7 +176,6 @@ async def test_search_empty_returns_empty_list():
             "tracks": [], "artists": [], "albums": [], "playlists": [],
         }
     }
-    with patch("pipeline.music_assistant_client.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value = _mock_http_post(body)
-        results = await ma.search("xyzzy404notfound", media_type="track")
+    ma._client = _mock_http_post(body)
+    results = await ma.search("xyzzy404notfound", media_type="track")
     assert results == []

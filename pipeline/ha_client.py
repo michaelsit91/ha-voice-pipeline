@@ -1,4 +1,4 @@
-import httpx
+import asyncio, httpx
 
 CONTROLLABLE_DOMAINS = {"light", "switch", "fan", "media_player", "climate", "cover", "input_boolean"}
 
@@ -7,11 +7,37 @@ class HAClient:
     def __init__(self, ha_url: str, token: str):
         self._url = ha_url.rstrip("/")
         self._hdrs = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        self._client: httpx.AsyncClient | None = None
+        self._loop: object | None = None  # tracks which event loop owns _client
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Return the shared client, creating it lazily and recreating on loop change.
+
+        In production there is one event loop per process lifetime, so the client
+        is created once and pooled indefinitely. In tests with per-function event
+        loops, the client is transparently recreated when the loop changes.
+        Only recreates on loop change when a loop was previously tracked
+        (avoids overwriting a test-injected mock when _loop is still None).
+        """
+        try:
+            current_loop: object | None = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        loop_changed = self._loop is not None and self._loop is not current_loop
+        if self._client is None or self._client.is_closed or loop_changed:
+            self._client = httpx.AsyncClient()
+            self._loop = current_loop
+        return self._client
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+            self._loop = None
 
     async def get_entities(self) -> list[dict]:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(f"{self._url}/api/states", headers=self._hdrs, timeout=10)
-            r.raise_for_status()
+        r = await self._get_client().get(f"{self._url}/api/states", headers=self._hdrs, timeout=10)
+        r.raise_for_status()
         raw = [
             {
                 "entity_id": s["entity_id"],
@@ -21,11 +47,8 @@ class HAClient:
             }
             for s in r.json()
             if s["entity_id"].split(".")[0] in CONTROLLABLE_DOMAINS
-            and s["state"] != "unavailable"  # exclude offline/unreachable devices
+            and s["state"] != "unavailable"
         ]
-        # Deduplicate by friendly name: when multiple entities share the same name
-        # (e.g. light.X and switch.X from Z2M), keep the one with the most attributes
-        # since more attributes = more capable (e.g. light with brightness > switch).
         by_name: dict[str, dict] = {}
         for e in raw:
             existing = by_name.get(e["name"])
@@ -41,27 +64,25 @@ class HAClient:
             '{% set r.a = r.a + [{"area_id": aid, "name": area_name(aid)}] %}'
             '{% endfor %}{{ r.a | tojson }}'
         )
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self._url}/api/template",
-                headers=self._hdrs,
-                json={"template": _TMPL},
-                timeout=10,
-            )
-            if r.status_code in (404, 400):
-                return []
-            r.raise_for_status()
+        r = await self._get_client().post(
+            f"{self._url}/api/template",
+            headers=self._hdrs,
+            json={"template": _TMPL},
+            timeout=10,
+        )
+        if r.status_code in (404, 400):
+            return []
+        r.raise_for_status()
         import json
         return json.loads(r.text)
 
     async def get_state(self, entity_id: str) -> dict:
-        async with httpx.AsyncClient() as c:
-            r = await c.get(
-                f"{self._url}/api/states/{entity_id}",
-                headers=self._hdrs,
-                timeout=10,
-            )
-            r.raise_for_status()
+        r = await self._get_client().get(
+            f"{self._url}/api/states/{entity_id}",
+            headers=self._hdrs,
+            timeout=10,
+        )
+        r.raise_for_status()
         s = r.json()
         return {
             "entity_id": s["entity_id"],
@@ -80,15 +101,14 @@ class HAClient:
     ) -> dict:
         payload: dict = {**kwargs}
         if entity_id is not None:
-            payload["entity_id"] = entity_id  # HA accepts str or list
+            payload["entity_id"] = entity_id
         if area_id is not None:
             payload["area_id"] = area_id
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self._url}/api/services/{domain}/{service}",
-                headers=self._hdrs,
-                json=payload,
-                timeout=15,
-            )
-            r.raise_for_status()
+        r = await self._get_client().post(
+            f"{self._url}/api/services/{domain}/{service}",
+            headers=self._hdrs,
+            json=payload,
+            timeout=15,
+        )
+        r.raise_for_status()
         return r.json() if r.content else {}
