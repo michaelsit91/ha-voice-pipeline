@@ -520,10 +520,21 @@ async def test_planner_case(case, ollama, ha_context):
     print(f"  transcript: {case['transcript']!r}")
 
     for i in range(RUNS):
-        t0     = time.perf_counter()
-        result = await plan(case["transcript"], entities, areas, ollama)
-        lat    = time.perf_counter() - t0
-        score  = _score_run(case, result)
+        t0 = time.perf_counter()
+        try:
+            result = await plan(case["transcript"], entities, areas, ollama)
+        except Exception as exc:
+            lat = time.perf_counter() - t0
+            score = {
+                "json_valid": False, "intent_correct": False, "check_passed": False,
+                "check_reason": f"exception: {exc}", "has_ok_response": False,
+                "entities_known": False, "steps_count": 0, "latency_s": lat, "result": {},
+            }
+            run_scores.append(score)
+            print(f"  run {i+1}: ✗  {lat:.2f}s  exception: {exc}")
+            continue
+        lat   = time.perf_counter() - t0
+        score = _score_run(case, result)
         score["latency_s"] = lat
         run_scores.append(score)
         status = "✓" if score["check_passed"] else "✗"
