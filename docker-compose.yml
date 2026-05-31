@@ -16,7 +16,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:18795/health', timeout=4); r.raise_for_status()"]
+      test: ["CMD", "curl", "-sf", "http://localhost:18795/health"]
       interval: 30s
       timeout: 5s
       retries: 3

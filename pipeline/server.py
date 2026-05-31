@@ -1,7 +1,7 @@
-import json, logging, os, time, uuid
+import asyncio, json, logging, os, time, uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
@@ -23,15 +23,21 @@ log.setLevel(logging.INFO)
 log.addHandler(_handler)
 log.propagate = False
 
+
+def _resolve_ollama_url(vram_manager_url: str, ollama_url: str) -> str:
+    """Return the effective Ollama URL: proxy path when VRAM_MANAGER_URL is set."""
+    if vram_manager_url:
+        return f"{vram_manager_url.rstrip('/')}/ollama"
+    return ollama_url
+
+
 _ha = HAClient(
     os.getenv("HA_URL", ""),
     os.getenv("HA_TOKEN", ""),
 )
 _VRAM_MANAGER_URL = os.environ.get("VRAM_MANAGER_URL", "").rstrip("/")
-_EFFECTIVE_OLLAMA_URL = (
-    f"{_VRAM_MANAGER_URL}/ollama"
-    if _VRAM_MANAGER_URL
-    else os.environ.get("OLLAMA_URL", "")
+_EFFECTIVE_OLLAMA_URL = _resolve_ollama_url(
+    _VRAM_MANAGER_URL, os.environ.get("OLLAMA_URL", "")
 )
 _ollama = OllamaClient(
     _EFFECTIVE_OLLAMA_URL,
@@ -54,6 +60,8 @@ if _ma_settings:
         log.info("SPOTIFY_SYNC | enabled (device=%r, settings=%s)", _librespot_name, _ma_settings)
     except Exception as e:
         log.warning("SPOTIFY_SYNC | disabled — could not init: %s", e)
+
+_MAX_TRANSCRIPT_CHARS = 500
 
 
 @asynccontextmanager
@@ -79,14 +87,56 @@ async def _lifespan(app: FastAPI):
     except Exception as e:
         log.warning("MUSIC | discovery failed at startup: %s", e)
     yield
+    # Graceful shutdown: close pooled HTTP clients
+    await _ha.close()
+    await _ollama.close()
+    await _ma.close()
+    if _spotify_sync is not None and _spotify_sync._client is not None:
+        await _spotify_sync._client.aclose()
 
 
 app = FastAPI(lifespan=_lifespan)
 
 
+def _require_api_key(request: Request) -> None:
+    """FastAPI dependency: enforce X-API-Key when API_KEY env var is set."""
+    api_key = os.getenv("API_KEY", "").strip()
+    if not api_key:
+        return
+    if request.headers.get("X-API-Key", "") != api_key:
+        raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/health/deep")
+async def health_deep():
+    """Probe HA and Ollama reachability. Always HTTP 200; check body status."""
+    import httpx as _httpx
+    results: dict = {}
+
+    async def _probe(name: str, url: str, headers: dict = {}) -> None:
+        try:
+            async with _httpx.AsyncClient(timeout=4) as c:
+                r = await c.get(url, headers=headers)
+                r.raise_for_status()
+            results[name] = {"status": "ok"}
+        except Exception as exc:
+            results[name] = {"status": "error", "detail": str(exc)[:120]}
+
+    await asyncio.gather(
+        _probe("ha",     f"{_ha._url}/api/",  _ha._hdrs),
+        _probe("ollama", f"{_ollama.url}/api/version"),
+    )
+
+    all_ok   = all(v["status"] == "ok"    for v in results.values())
+    all_down = all(v["status"] == "error" for v in results.values())
+    overall  = "ok" if all_ok else ("down" if all_down else "degraded")
+    return {"status": overall, "components": results}
+
 
 @app.get("/v1/models")
 async def list_models():
@@ -96,11 +146,32 @@ async def list_models():
         "data": [{"id": model_id, "object": "model", "owned_by": "local"}],
     }
 
-@app.post("/v1/chat/completions")
+
+@app.get("/status")
+async def status():
+    """Internal runtime state: model, satellite map, feature flags."""
+    return {
+        "model":                os.getenv("MODEL", "default"),
+        "satellite_map":        _ma._satellite_map,
+        "spotify_sync_enabled": _spotify_sync is not None,
+        "vram_manager_url":     _VRAM_MANAGER_URL or None,
+    }
+
+
+@app.post("/reload", dependencies=[Depends(_require_api_key)])
+async def reload():
+    """Re-run Music Assistant satellite discovery without container restart."""
+    await _ma.discover()
+    log.info("RELOAD | satellite_map refreshed: %s", _ma._satellite_map)
+    return {"satellite_map": _ma._satellite_map}
+
+
+@app.post("/v1/chat/completions", dependencies=[Depends(_require_api_key)])
 async def chat_completions(request: Request):
     body     = await request.json()
     messages = body.get("messages", [])
     stream   = body.get("stream", False)
+
     def _extract_text(content):
         if isinstance(content, str):
             return content.strip()
@@ -116,6 +187,9 @@ async def chat_completions(request: Request):
     if not transcript:
         return JSONResponse({"error": "no user message"}, status_code=400)
 
+    if len(transcript) > _MAX_TRANSCRIPT_CHARS:
+        return JSONResponse({"error": "transcript too long"}, status_code=400)
+
     t0 = time.perf_counter()
     log.info("IN  | %r", transcript)
     satellite = request.query_params.get("satellite")
@@ -125,9 +199,9 @@ async def chat_completions(request: Request):
         spotify_sync=_spotify_sync,
     )
     log.info("OUT | %.2fs | %r", time.perf_counter() - t0, text)
-    cid  = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    cid      = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     model_id = os.getenv("MODEL", "default")
-    ts   = int(time.time())
+    ts       = int(time.time())
 
     if stream:
         async def event_stream():

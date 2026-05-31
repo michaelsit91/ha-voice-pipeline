@@ -60,33 +60,39 @@ async def test_plan_returns_valid_entity_ids(ollama, ha_context):
         # area_id steps have no entity_id to validate here
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_execute_query_returns_state(ha, ollama):
-    steps = [{"domain": "homeassistant", "service": "get_state",
-              "entity_id": "light.kitchen_ceiling"}]
+async def test_execute_query_returns_state(ha, ollama, ha_context):
+    lights = [e for e in ha_context["entities"] if e["entity_id"].startswith("light.")]
+    if not lights:
+        pytest.skip("No light entities available in this HA instance")
+    eid = lights[0]["entity_id"]
+    steps = [{"domain": "light", "service": "get_state", "entity_id": eid}]
     result = await execute(intent="query", steps=steps, ha=ha, ollama=ollama,
-                           ok_response="The kitchen ceiling light state was checked.",
+                           ok_response=f"The {lights[0]['name']} state was checked.",
                            fail_response="Could not read state.")
     assert isinstance(result, str) and len(result) > 0
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_execute_action_turn_on(ha, ollama):
-    _eid = "light.kitchen_ceiling"
+async def test_execute_action_turn_on(ha, ollama, ha_context):
+    lights = [e for e in ha_context["entities"] if e["entity_id"].startswith("light.")]
+    if not lights:
+        pytest.skip("No light entities available in this HA instance")
+    eid = lights[0]["entity_id"]
     try:
-        initial = (await ha.get_state(_eid))["state"]
+        initial = (await ha.get_state(eid))["state"]
     except Exception:
         initial = None
 
-    steps = [{"domain": "light", "service": "turn_on", "entity_id": _eid}]
+    steps = [{"domain": "light", "service": "turn_on", "entity_id": eid}]
     try:
         result = await execute(intent="action", steps=steps, ha=ha, ollama=ollama,
-                               ok_response="The kitchen ceiling light is now on.",
-                               fail_response="Sorry, I couldn't reach the kitchen ceiling light.")
+                               ok_response=f"The {lights[0]['name']} is now on.",
+                               fail_response=f"Sorry, I couldn't reach the {lights[0]['name']}.")
         assert isinstance(result, str) and len(result) > 0
     finally:
         if initial is not None:
             svc = "turn_on" if initial == "on" else "turn_off"
             try:
-                await ha.call_service("light", svc, entity_id=_eid)
+                await ha.call_service("light", svc, entity_id=eid)
             except Exception:
                 pass
 
