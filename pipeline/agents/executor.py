@@ -260,6 +260,7 @@ async def execute(
     fail_response: str = "",
     ma: MusicAssistantClient | None = None,
     spotify_sync: SpotifyConnectSync | None = None,
+    entity_names: dict[str, str] | None = None,
 ) -> str:
     # Music steps are handled separately — branch before HA execution
     music_steps = [s for s in steps if s.get("domain") == "music_assistant"]
@@ -281,18 +282,36 @@ async def execute(
     if n_fail == 0:
         if all(r["outcome"] == "already" for r in results) and already_response:
             return _vary(already_response)
+        # One confirmation register: simple single-step action successes get the
+        # same terse ack as the fast path (pre-cached TTS). Multi-step successes
+        # keep the informative sentence — the words carry information there.
+        if intent == "action" and n_total == 1:
+            return "Done."
         return _vary(ok_response) if ok_response else "Done."
 
     if n_fail == n_total:
         return fail_response or "Sorry, I couldn't complete that."
 
-    # Partial failure — one micro-LLM call for an accurate sentence
-    succeeded_ids = [str(r.get("entity_id", "")) for r in results if r["outcome"] != "failed"]
-    failed_ids    = [str(r.get("entity_id", "")) for r in failed]
+    # Partial failure — one micro-LLM call for an accurate sentence.
+    # Speak friendly names, never raw entity_ids ("living room 3 gang 1 left 3").
+    names = entity_names or {}
+
+    def _spoken(r: dict) -> str:
+        eid = r.get("entity_id", "")
+        if isinstance(eid, list):
+            return ", ".join(names.get(e, str(e)) for e in eid)
+        return names.get(eid, str(eid))
+
+    succeeded_ids = [_spoken(r) for r in results if r["outcome"] != "failed"]
+    failed_ids    = [_spoken(r) for r in failed]
     user = (
         f"Partial result:\n"
         f"Succeeded: {', '.join(succeeded_ids)}\n"
         f"Failed: {', '.join(failed_ids)}\n"
         f"Base response: {ok_response}"
     )
-    return await ollama.chat(system=_PARTIAL_SYSTEM, user=user)
+    try:
+        return await ollama.chat(system=_PARTIAL_SYSTEM, user=user)
+    except Exception as e:
+        log.warning("EXEC | partial-failure LLM call failed: %s", e)
+        return f"Done, but {n_fail} device(s) didn't respond."

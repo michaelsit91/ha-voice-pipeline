@@ -112,7 +112,7 @@ async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient
         return None
     if len(valid) == 1:
         name, state = valid[0]
-        return f"The {name} is {state}."
+        return _speak_state(name, state)
     on  = [n for n, s in valid if s == "on"]
     off = [n for n, s in valid if s != "on"]
     if not on:
@@ -120,6 +120,13 @@ async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient
     if not off:
         return "All of those are on."
     return f"{len(on)} on and {len(off)} off."
+
+def _speak_state(name: str, state: str) -> str:
+    """Spoken form of a device state — never read raw HA states aloud."""
+    if state in ("unavailable", "unknown"):
+        return f"The {name} isn't responding."
+    return f"The {name} is {state}."
+
 
 async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None) -> str | None:
     """Execute a fast-path plan optimistically (no readback) and return the spoken
@@ -129,7 +136,7 @@ async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None) -> 
             st = await ha.get_state(fast["entity_id"])
         except Exception:
             return None
-        return f"The {fast['name']} is {st['state']}."
+        return _speak_state(fast["name"], st["state"])
 
     domain, service = fast["domain"], fast["service"]
     entity_id = fast.get("entity_id")
@@ -146,7 +153,7 @@ async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None) -> 
             await ha.call_service(domain, service, entity_id=entity_id, area_id=area_id, **extra)
     except Exception as e:
         log.warning("FAST | execution failed: %s", e)
-        return "Sorry."
+        return "Sorry, that didn't work."
     return fast["ack"]
 
 
@@ -208,4 +215,5 @@ async def run_pipeline(
         fail_response=planned.get("fail_response", ""),
         ma=ma,
         spotify_sync=spotify_sync,
+        entity_names={e["entity_id"]: e["name"] for e in entities},
     )

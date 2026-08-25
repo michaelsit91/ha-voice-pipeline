@@ -1,7 +1,30 @@
-import os, time, httpx
+import asyncio, json, os, time, httpx
 from pipeline._http import PooledClient
 
 CONTROLLABLE_DOMAINS = {"light", "switch", "fan", "media_player", "climate", "cover", "input_boolean"}
+
+# Transient network failures worth one retry on READ operations only.
+_TRANSIENT_EXC = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                  httpx.PoolTimeout, httpx.RemoteProtocolError)
+_TRANSIENT_STATUS = (502, 503, 504)
+_RETRY_BACKOFF_S = 0.15
+
+
+async def _read_with_retry(coro_factory):
+    """Await coro_factory() with one retry on a transient network error or 5xx.
+    READ-only — never used for service calls (re-firing could double-execute)."""
+    for attempt in range(2):
+        try:
+            r = await coro_factory()
+        except _TRANSIENT_EXC:
+            if attempt == 0:
+                await asyncio.sleep(_RETRY_BACKOFF_S)
+                continue
+            raise
+        if getattr(r, "status_code", 200) in _TRANSIENT_STATUS and attempt == 0:
+            await asyncio.sleep(_RETRY_BACKOFF_S)
+            continue
+        return r
 
 
 class HAClient(PooledClient):
@@ -37,7 +60,9 @@ class HAClient(PooledClient):
         return await self._cached("areas", self._fetch_areas, self._areas_ttl)
 
     async def _fetch_entities(self) -> list[dict]:
-        r = await self._get_client().get(f"{self._url}/api/states", headers=self._hdrs, timeout=10)
+        r = await _read_with_retry(
+            lambda: self._get_client().get(f"{self._url}/api/states", headers=self._hdrs, timeout=10)
+        )
         r.raise_for_status()
         raw = [
             {
@@ -65,24 +90,23 @@ class HAClient(PooledClient):
             '{% set r.a = r.a + [{"area_id": aid, "name": area_name(aid)}] %}'
             '{% endfor %}{{ r.a | tojson }}'
         )
-        r = await self._get_client().post(
+        r = await _read_with_retry(lambda: self._get_client().post(
             f"{self._url}/api/template",
             headers=self._hdrs,
             json={"template": _TMPL},
             timeout=10,
-        )
+        ))
         if r.status_code in (404, 400):
             return []
         r.raise_for_status()
-        import json
         return json.loads(r.text)
 
     async def get_state(self, entity_id: str) -> dict:
-        r = await self._get_client().get(
+        r = await _read_with_retry(lambda: self._get_client().get(
             f"{self._url}/api/states/{entity_id}",
             headers=self._hdrs,
             timeout=10,
-        )
+        ))
         r.raise_for_status()
         s = r.json()
         return {

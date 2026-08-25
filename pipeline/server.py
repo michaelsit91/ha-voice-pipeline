@@ -197,11 +197,15 @@ async def chat_completions(request: Request):
     t0 = time.perf_counter()
     log.info("IN  | %r", transcript)
     satellite = request.query_params.get("satellite")
-    text = await run_pipeline(
-        transcript, _ha, _ollama,
-        ma=_ma, satellite=satellite,
-        spotify_sync=_spotify_sync,
-    )
+    try:
+        text = await run_pipeline(
+            transcript, _ha, _ollama,
+            ma=_ma, satellite=satellite,
+            spotify_sync=_spotify_sync,
+        )
+    except Exception:
+        log.exception("PIPELINE | unhandled error for %r", transcript)
+        text = "Sorry, something went wrong."
     log.info("OUT | %.2fs | %r", time.perf_counter() - t0, text)
     cid      = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     model_id = os.getenv("MODEL", "default")
