@@ -66,8 +66,10 @@ def test_compound_command_returns_none():
     assert match_fast_intent("turn on the kitchen light and the office fan", E, AREAS) is None
 
 
-def test_play_song_returns_none():
-    assert match_fast_intent("play despacito", E, AREAS) is None
+def test_play_song_is_music_fast_intent():
+    m = match_fast_intent("play despacito", E, AREAS)
+    assert m is not None and m["kind"] == "music"
+    assert m["query"] == "despacito"
 
 
 def test_dim_not_handled_lights_are_onoff():

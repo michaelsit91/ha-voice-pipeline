@@ -2,7 +2,6 @@ import asyncio, json, logging, os, random
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.music_assistant_client import MusicAssistantClient
-from pipeline.spotify_connect_sync import SpotifyConnectSync, extract_spotify_track_id
 
 log = logging.getLogger("pipeline")
 
@@ -198,13 +197,45 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
     return {"entity_id": entity_id, "outcome": outcome}
 
 
+async def _resolve_media(
+    query: str,
+    artist: str | None,
+    media_type: str,
+    ma: MusicAssistantClient,
+    spotify_search=None,
+) -> dict | None:
+    """Resolve a heard query to {uri, name, artist} for MA play_media.
+
+    Chain: wide MA search re-ranked with rapidfuzz (best acoustic match wins
+    even on misheard STT) → raw MA search (last resort).
+    """
+    if spotify_search is not None:
+        try:
+            sp = await spotify_search.search(query, media_type=media_type, artist=artist)
+        except Exception as e:
+            log.warning("MUSIC | fuzzy search unavailable (%s) — raw MA fallback", e)
+            sp = []
+        if sp:
+            best = sp[0]
+            log.info("MUSIC | fuzzy match %r by %r (score %.0f)",
+                     best["name"], best["artist"], best["score"])
+            return {"uri": best["uri"], "name": best["name"], "artist": best["artist"]}
+
+    try:
+        results = await ma.search(query, media_type=media_type, artist=artist)
+    except Exception as e:
+        log.warning("MUSIC | MA search error: %s", e)
+        return None
+    return results[0] if results else None
+
+
 async def _run_music_step(
     step: dict,
     ha: HAClient,
     ma: MusicAssistantClient,
-    spotify_sync: SpotifyConnectSync | None = None,
+    spotify_search=None,
 ) -> str:
-    """Execute one music_assistant.play_media step: search then play."""
+    """Execute one music_assistant.play_media step: resolve then play."""
     query      = step.get("query", "")
     artist     = step.get("artist") or None
     media_type = step.get("media_type", "track")
@@ -212,17 +243,13 @@ async def _run_music_step(
 
     if not query:
         return "Sorry, I didn't catch what you wanted to play."
+    if not entity_id:
+        return "Sorry, I can't find a speaker to play that on."
 
-    try:
-        results = await ma.search(query, media_type=media_type, artist=artist)
-    except Exception as e:
-        log.warning("MUSIC | search error: %s", e)
-        return "Sorry, Music Assistant isn't responding right now."
-
-    if not results:
+    best = await _resolve_media(query, artist, media_type, ma, spotify_search)
+    if best is None:
         return f"Sorry, I couldn't find {query}."
 
-    best        = results[0]
     uri         = best["uri"]
     track_name  = best["name"]
     artist_name = best["artist"]
@@ -235,15 +262,24 @@ async def _run_music_step(
             media_type=media_type,
         )
     except Exception as e:
-        log.warning("MUSIC | play_media error: %s", e)
-        return "Sorry, I couldn't play that right now."
-
-    # Fire-and-forget: sync to Spotify Connect so the phone shows what's playing
-    if spotify_sync is not None and media_type == "track":
-        track_id = extract_spotify_track_id(uri)
-        if track_id:
-            asyncio.create_task(spotify_sync.schedule_sync(track_id))
-            log.debug("SPOTIFY_SYNC | scheduled sync for track %s", track_id)
+        log.warning("MUSIC | play_media error for %r: %s — MA raw-query fallback", uri, e)
+        # Direct spotify:// URI rejected (provider quirk) — resolve via MA search
+        try:
+            results = await ma.search(track_name or query, media_type=media_type,
+                                      artist=artist_name or artist)
+            if not results:
+                return f"Sorry, I couldn't find {query}."
+            uri, track_name, artist_name = (results[0]["uri"], results[0]["name"],
+                                            results[0]["artist"])
+            await ha.call_service(
+                "music_assistant", "play_media",
+                entity_id=entity_id,
+                media_id=uri,
+                media_type=media_type,
+            )
+        except Exception as e2:
+            log.warning("MUSIC | play_media fallback error: %s", e2)
+            return "Sorry, I couldn't play that right now."
 
     if artist_name:
         return f"Playing {track_name} by {artist_name}."
@@ -259,7 +295,7 @@ async def execute(
     already_response: str = "",
     fail_response: str = "",
     ma: MusicAssistantClient | None = None,
-    spotify_sync: SpotifyConnectSync | None = None,
+    spotify_search=None,
     entity_names: dict[str, str] | None = None,
 ) -> str:
     # Music steps are handled separately — branch before HA execution
@@ -267,7 +303,7 @@ async def execute(
     if music_steps:
         if ma is None:
             return "Sorry, Music Assistant is not configured."
-        return await _run_music_step(music_steps[0], ha, ma, spotify_sync)
+        return await _run_music_step(music_steps[0], ha, ma, spotify_search)
 
     # Run all HA steps in parallel
     results = await asyncio.gather(*[_run_step(s, ha) for s in steps])

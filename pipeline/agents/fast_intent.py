@@ -18,7 +18,9 @@ _FILLER = {
 _TOGGLEABLE = {"light", "switch", "fan", "input_boolean"}
 
 _PCT = r"(\d{1,3})\s*(?:percent|%)"
-_ACK = "OK"
+# Empty on purpose: fast-path successes are acknowledged by the satellite's
+# success chime (firmware on_end), not by spoken TTS — snappier, Alexa-like.
+_ACK = ""
 
 
 def _target_text(transcript: str) -> str:
@@ -80,6 +82,55 @@ def _resolve_entity(target: str, entities: list[dict], min_score: int, margin: i
     return None
 
 
+_PLAY_RE = re.compile(r"^(?:play|put on)\s+(.+?)[.!?]?$")
+# Queries too vague to resolve deterministically — let the LLM interpret them.
+# Covers bare requests ("play music") and mood requests ("play something relaxing").
+_VAGUE_PLAY = re.compile(
+    r"^(?:some\s+)?(?:music|songs?|radio)$"
+    r"|^(?:something|anything|a song)(?:\s+.+)?$"
+)
+_MEDIA_TYPE_PREFIX = re.compile(
+    r"^(?:the\s+)?(album|playlist|artist)\s+(.+)$"
+)
+_ARTIST_STYLE = re.compile(
+    r"^(?:some|songs?\s+by|music\s+by|tracks?\s+by)\s+(.+)$"
+)
+
+
+def _match_play(t: str) -> dict | None:
+    """Deterministic 'play <query> [by <artist>]' → music step (skips the LLM).
+
+    Vague requests ('play some music', 'play something relaxing') return None
+    so the planner can interpret them.
+    """
+    m = _PLAY_RE.match(t)
+    if m is None:
+        return None
+    rest = m.group(1).strip()
+    if _VAGUE_PLAY.match(rest):
+        return None
+
+    media_type = "track"
+    tm = _MEDIA_TYPE_PREFIX.match(rest)
+    if tm:
+        media_type, rest = tm.group(1), tm.group(2).strip()
+    else:
+        am = _ARTIST_STYLE.match(rest)
+        if am:
+            media_type, rest = "artist", am.group(1).strip()
+
+    artist = None
+    if media_type == "track":
+        parts = re.split(r"\s+by\s+", rest, maxsplit=1)
+        if len(parts) == 2:
+            rest, artist = parts[0].strip(), parts[1].strip()
+
+    if not rest:
+        return None
+    return {"kind": "music", "query": rest, "artist": artist,
+            "media_type": media_type, "needs_player": True}
+
+
 def match_fast_intent(
     transcript: str,
     entities: list[dict],
@@ -112,6 +163,10 @@ def match_fast_intent(
     if re.search(r"\bpause\b", t):
         return {"kind": "action", "domain": "media_player", "service": "media_pause",
                 "needs_player": True, "ack": _ACK}
+
+    music = _match_play(t)
+    if music is not None:
+        return music
 
     # ── Device-targeted intents ─────────────────────────────────────────────────
     kind = service = None

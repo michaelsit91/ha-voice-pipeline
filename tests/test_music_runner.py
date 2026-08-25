@@ -32,7 +32,11 @@ def _make_ma(player="media_player.respeaker_lite_media_player_2"):
 
 @pytest.mark.asyncio
 async def test_runner_injects_satellite_player_into_music_step():
-    """Runner overrides entity_id in music steps with the resolved satellite player."""
+    """Runner overrides entity_id in music steps with the resolved satellite player.
+
+    Uses a vague transcript so the request routes through the LLM planner —
+    deterministic 'play <song>' forms are handled by the music fast path.
+    """
     plan_result = {
         "corrected": "play Blinding Lights",
         "intent": "action",
@@ -53,7 +57,7 @@ async def test_runner_injects_satellite_player_into_music_step():
 
     with patch("pipeline.runner.execute") as mock_exec:
         mock_exec.return_value = "Playing Blinding Lights by The Weeknd."
-        await run_pipeline("play Blinding Lights", ha, ollama, ma=ma, satellite="respeaker_lite")
+        await run_pipeline("play something upbeat", ha, ollama, ma=ma, satellite="respeaker_lite")
 
     called_steps = mock_exec.call_args.kwargs["steps"]
     assert called_steps[0]["entity_id"] == "media_player.respeaker_lite_media_player_2"
@@ -80,7 +84,8 @@ async def test_runner_passes_ma_to_execute():
 
     with patch("pipeline.runner.execute") as mock_exec:
         mock_exec.return_value = "Playing Blinding Lights by The Weeknd."
-        await run_pipeline("play Blinding Lights", ha, ollama, ma=ma, satellite="respeaker_lite")
+        # Vague transcript → LLM planner path (fast path handles 'play <song>')
+        await run_pipeline("play something upbeat", ha, ollama, ma=ma, satellite="respeaker_lite")
 
     assert mock_exec.call_args.kwargs.get("ma") is ma
 
@@ -103,4 +108,6 @@ async def test_runner_works_without_ma_for_non_music_commands():
 
     result = await run_pipeline("turn on the office light", ha, ollama, ma=None, satellite=None)
 
-    assert isinstance(result, str) and len(result) > 0
+    # Empty response = silent success ack (satellite chime); the call is the proof.
+    assert isinstance(result, str)
+    ha.call_service.assert_awaited()

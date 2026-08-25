@@ -91,6 +91,21 @@ class MusicAssistantClient(PooledClient):
             return next(iter(self._satellite_map.values()))
         return None
 
+    async def resolve_player_fresh(self, satellite_slug: str | None) -> str | None:
+        """resolve_player, but re-discover once when a known satellite is missing
+        from the map (players renamed / MA restarted) instead of silently routing
+        music to whatever player happened to be discovered first."""
+        if satellite_slug and satellite_slug not in self._satellite_map:
+            try:
+                await self.discover()
+            except Exception as e:
+                log.warning("MUSIC | re-discovery failed: %s", e)
+            if satellite_slug not in self._satellite_map:
+                log.warning("MUSIC | no MA player for satellite %r after re-discovery",
+                            satellite_slug)
+                return None
+        return self.resolve_player(satellite_slug)
+
     async def search(
         self,
         name: str,

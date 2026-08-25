@@ -25,7 +25,8 @@ async def test_fast_path_hit_executes_without_llm():
     ollama.chat = AsyncMock()
     with patch.object(runner, "_FAST_PATH_ENABLED", True):
         resp = await runner.run_pipeline("turn on the kitchen light", ha, ollama)
-    assert isinstance(resp, str) and resp
+    # Empty response = silent success ack (satellite chime replaces spoken "OK").
+    assert isinstance(resp, str)
     ha.call_service.assert_awaited_once()
     ollama.chat.assert_not_awaited()
 

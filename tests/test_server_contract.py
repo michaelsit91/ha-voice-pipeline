@@ -76,7 +76,7 @@ def test_status_endpoint_shape():
     body = r.json()
     assert "model" in body
     assert isinstance(body["satellite_map"], dict)
-    assert isinstance(body["spotify_sync_enabled"], bool)
+    assert isinstance(body["spotify_search_enabled"], bool)
     assert "vram_manager_url" in body
 
 

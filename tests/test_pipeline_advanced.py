@@ -59,7 +59,8 @@ async def test_turn_on_verifies_state_changed(ha, ollama):
     assert before["state"] == "off", "Fixture should ensure light starts off"
 
     response = await run_pipeline("turn on the office light", ha, ollama)
-    assert isinstance(response, str) and len(response) > 0
+    # Empty response = silent success ack (satellite chime); state check below is the proof.
+    assert isinstance(response, str)
     await asyncio.sleep(ZIGBEE_SETTLE)
 
     after = await ha.get_state(OFFICE_LIGHT)
@@ -74,7 +75,8 @@ async def test_turn_off_verifies_state_changed(ha, ollama):
     assert before["state"] == "on"
 
     response = await run_pipeline("turn off the office light", ha, ollama)
-    assert isinstance(response, str) and len(response) > 0
+    # Empty response = silent success ack (satellite chime); state check below is the proof.
+    assert isinstance(response, str)
     await asyncio.sleep(ZIGBEE_SETTLE)
 
     after = await ha.get_state(OFFICE_LIGHT)
@@ -102,7 +104,8 @@ async def test_fan_turn_on_verifies_state(ha, ollama):
     assert before["state"] == "off"
 
     response = await run_pipeline("turn on the office fan", ha, ollama)
-    assert isinstance(response, str) and len(response) > 0
+    # Empty response = silent success ack (satellite chime); state check below is the proof.
+    assert isinstance(response, str)
     await asyncio.sleep(ZIGBEE_SETTLE)
 
     after = await ha.get_state(OFFICE_FAN)
@@ -131,7 +134,8 @@ async def test_stt_correction_controls_correct_entity(ha, ollama):
     Uses 'tern' (turn) and 'lait' (light) as garbled words; 'office' is intact
     so the keyword filter can find the office light entity."""
     response = await run_pipeline("tern on the office lait", ha, ollama)
-    assert isinstance(response, str) and len(response) > 0
+    # Empty response = silent success ack (satellite chime); state check below is the proof.
+    assert isinstance(response, str)
     await asyncio.sleep(ZIGBEE_SETTLE)
 
     after = await ha.get_state(OFFICE_LIGHT)
@@ -154,7 +158,8 @@ async def test_nonexistent_entity_responds_gracefully(ha, ollama):
 async def test_switch_entity_controlled(ha, ollama):
     """Pipeline correctly identifies and controls switch-domain entities."""
     response = await run_pipeline("turn on the hallway cabinet light", ha, ollama)
-    assert isinstance(response, str) and len(response) > 0
+    # Empty response = silent success ack (satellite chime); device state is the proof.
+    assert isinstance(response, str)
     await asyncio.sleep(ZIGBEE_SETTLE)
 
     after = await ha.get_state(CABINET_LIGHT)
@@ -168,7 +173,8 @@ async def test_toggle_command(ha, ollama):
     """Toggle command changes state from current state."""
     before = await ha.get_state(OFFICE_LIGHT)
     response = await run_pipeline("toggle the office light", ha, ollama)
-    assert isinstance(response, str) and len(response) > 0
+    # Empty response = silent success ack (satellite chime); device state is the proof.
+    assert isinstance(response, str)
     await asyncio.sleep(ZIGBEE_SETTLE)
 
     after = await ha.get_state(OFFICE_LIGHT)

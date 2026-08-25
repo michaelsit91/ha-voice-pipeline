@@ -7,7 +7,7 @@ from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.music_assistant_client import MusicAssistantClient
 from pipeline.runner import run_pipeline
-from pipeline.spotify_connect_sync import SpotifyConnectSync
+from pipeline.spotify_search import SpotifySearch
 
 # ── Logging with local timezone ──────────────────────────────────────────────
 _TZ = timezone(timedelta(hours=int(os.getenv("TZ_OFFSET_HOURS", "0"))))
@@ -49,17 +49,9 @@ _ma = MusicAssistantClient(
     os.getenv("MA_CONFIG_ENTRY_ID", ""),
 )
 
-# Optional: Spotify Connect sync — bridges MA queue playback to the phone's Spotify app.
-# Reads MA's encrypted Spotify refresh token from settings.json; disabled if path not set.
-_spotify_sync: SpotifyConnectSync | None = None
-_ma_settings = os.getenv("MA_SETTINGS_JSON", "")
-_librespot_name = os.getenv("LIBRESPOT_DEVICE_NAME", "ReSpeaker Lite")
-if _ma_settings:
-    try:
-        _spotify_sync = SpotifyConnectSync(_ma_settings, _librespot_name)
-        log.info("SPOTIFY_SYNC | enabled (device=%r, settings=%s)", _librespot_name, _ma_settings)
-    except Exception as e:
-        log.warning("SPOTIFY_SYNC | disabled — could not init: %s", e)
+# Fuzzy music search rides on MA's search service (MA owns the Spotify auth;
+# the pipeline never refreshes Spotify tokens itself — that revokes the chain).
+_spotify_search = SpotifySearch(_ma)
 
 _MAX_TRANSCRIPT_CHARS = 500
 
@@ -91,8 +83,6 @@ async def _lifespan(app: FastAPI):
     await _ha.close()
     await _ollama.close()
     await _ma.close()
-    if _spotify_sync is not None and _spotify_sync._client is not None:
-        await _spotify_sync._client.aclose()
 
 
 app = FastAPI(lifespan=_lifespan)
@@ -152,9 +142,9 @@ async def status():
     """Internal runtime state: model, satellite map, feature flags."""
     return {
         "model":                os.getenv("MODEL", "default"),
-        "satellite_map":        _ma._satellite_map,
-        "spotify_sync_enabled": _spotify_sync is not None,
-        "vram_manager_url":     _VRAM_MANAGER_URL or None,
+        "satellite_map":          _ma._satellite_map,
+        "spotify_search_enabled": _spotify_search is not None,
+        "vram_manager_url":       _VRAM_MANAGER_URL or None,
     }
 
 
@@ -201,7 +191,7 @@ async def chat_completions(request: Request):
         text = await run_pipeline(
             transcript, _ha, _ollama,
             ma=_ma, satellite=satellite,
-            spotify_sync=_spotify_sync,
+            spotify_search=_spotify_search,
         )
     except Exception:
         log.exception("PIPELINE | unhandled error for %r", transcript)

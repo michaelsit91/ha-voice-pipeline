@@ -2,9 +2,8 @@ import asyncio, logging, os, re
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.agents.planner import plan, _HESITATION_PATTERNS
-from pipeline.agents.executor import execute, _run_volume_step
+from pipeline.agents.executor import execute, _run_volume_step, _run_music_step
 from pipeline.agents.fast_intent import match_fast_intent
-from pipeline.spotify_connect_sync import SpotifyConnectSync
 
 log = logging.getLogger("pipeline")
 
@@ -128,7 +127,8 @@ def _speak_state(name: str, state: str) -> str:
     return f"The {name} is {state}."
 
 
-async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None) -> str | None:
+async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None,
+                        spotify_search=None) -> str | None:
     """Execute a fast-path plan optimistically (no readback) and return the spoken
     response, or None to fall back to the LLM planner (e.g. unresolved MA player)."""
     if fast["kind"] == "query":
@@ -137,6 +137,16 @@ async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None) -> 
         except Exception:
             return None
         return _speak_state(fast["name"], st["state"])
+
+    if fast["kind"] == "music":
+        if ma is None:
+            return None  # music not configured — let the LLM path answer
+        player = await ma.resolve_player_fresh(satellite)
+        if not player:
+            return "Sorry, I can't find a speaker to play that on."
+        step = {"query": fast["query"], "artist": fast.get("artist"),
+                "media_type": fast["media_type"], "entity_id": player}
+        return await _run_music_step(step, ha, ma, spotify_search)
 
     domain, service = fast["domain"], fast["service"]
     entity_id = fast.get("entity_id")
@@ -163,12 +173,12 @@ async def run_pipeline(
     ollama: OllamaClient,
     ma=None,
     satellite: str | None = None,
-    spotify_sync: SpotifyConnectSync | None = None,
+    spotify_search=None,
 ) -> str:
     # Hesitation/cancellation check — zero latency, no HA or Ollama calls needed
     if _HESITATION_PATTERNS.search(transcript):
         log.info("PLAN | intent=hesitation  transcript=%r", transcript)
-        return "OK."
+        return ""  # acknowledged by the satellite success chime, no speech
 
     entities, areas = await asyncio.gather(ha.get_entities(), ha.get_areas())
 
@@ -176,7 +186,7 @@ async def run_pipeline(
     if _FAST_PATH_ENABLED:
         fast = match_fast_intent(transcript, entities, areas, _FAST_MIN_SCORE, _FAST_MARGIN)
         if fast is not None:
-            resp = await _execute_fast(fast, ha, ma, satellite)
+            resp = await _execute_fast(fast, ha, ma, satellite, spotify_search)
             if resp is not None:
                 log.info("FAST | %s -> %r", fast.get("service", fast["kind"]), resp)
                 return resp
@@ -214,6 +224,6 @@ async def run_pipeline(
         already_response=planned.get("already_response", ""),
         fail_response=planned.get("fail_response", ""),
         ma=ma,
-        spotify_sync=spotify_sync,
+        spotify_search=spotify_search,
         entity_names={e["entity_id"]: e["name"] for e in entities},
     )
