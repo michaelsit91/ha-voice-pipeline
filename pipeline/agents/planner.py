@@ -22,7 +22,7 @@ _RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "corrected":     {"type": "string"},
-        "intent":        {"type": "string", "enum": ["action", "query"]},
+        "intent":        {"type": "string", "enum": ["action", "query", "ignore"]},
         "steps": {
             "type": "array",
             "items": {
@@ -54,7 +54,7 @@ Given a voice transcript (which may contain STT errors) and a list of known devi
 JSON shape — return ONLY this, no markdown, no explanation:
 {
   "corrected": "<transcript with STT errors fixed>",
-  "intent": "action" | "query",
+  "intent": "action" | "query" | "ignore",
   "steps": [
     {"domain": "<domain>", "service": "<service>", "entity_id": "<string or array>"}
   ],
@@ -66,9 +66,18 @@ JSON shape — return ONLY this, no markdown, no explanation:
 Rules:
 - intent "query": user asks about current state (is X on? what is X set to?)
 - intent "action": user wants to change something
+- intent "ignore": the transcript is NOT addressed to a smart-home assistant — TV/movie dialogue,
+  background conversation between people, song lyrics, or a meaningless fragment picked up by a
+  false wake ("flable suit of jade", "I told you he'd be back tomorrow", "she never saw it coming").
+  For "ignore": steps MUST be [] and all responses MUST be "". When the transcript plausibly
+  commands or asks about a known device — even garbled — prefer "action"/"query" over "ignore".
+  Brevity is NOT evidence of non-direction: a short phrase naming no device but asking for a
+  change in the room ("make it dark", "louder", "turn it off", "too bright") is a command.
+  Choose "ignore" only on positive evidence — the speech is ABOUT someone or something else
+  (third-party narrative, past tense, dialogue, lyrics) rather than addressed to you.
 - entity_id MUST be an exact entity_id from the device list — never invent one
 - domain is the prefix before the dot in entity_id (e.g. entity_id "light.kitchen_1" → domain "light")
-- Room membership comes from the Areas table, NOT from entity names/ids. Some lights are wired to switches in OTHER rooms, so an entity like "light.living_room_*" may actually live in the kitchen area — entity names are unreliable for room inference. For ANY whole-room command ("the kitchen light", "living room lights", "all office fans"), emit ONE step with "area_id" from the Areas table and NO entity_id; Home Assistant then controls every matching device in that area. NEVER guess a single entity_id for a room command.
+- Room membership comes from each device's area_id column, NOT from entity names/ids. Some lights are wired to switches in OTHER rooms, so an entity like "light.living_room_*" may actually live in the kitchen area — entity names are unreliable for room inference. For ANY whole-room command ("the kitchen light", "living room lights", "all office fans"), emit ONE step with "area_id" from the Areas table and NO entity_id; Home Assistant then controls every matching device in that area. NEVER guess a single entity_id for a room command. When a query needs ONE device in a room, pick it by its area_id column and name — an id containing "kitchen" may belong to another room, and the kitchen's light may have a living_room_* id.
 - For queries: use service "get_state"
 - For actions: use the appropriate service (turn_on, turn_off, toggle, media_play, media_pause, etc.)
 
@@ -135,6 +144,15 @@ Transcript: tun off the oface silin fan
 Transcript: is the office light on
 {"corrected":"is the office light on","intent":"query","steps":[{"domain":"light","service":"get_state","entity_id":"light.office_light"}],"ok_response":"","fail_response":""}
 
+Transcript: flable suit of jade
+{"corrected":"","intent":"ignore","steps":[],"ok_response":"","already_response":"","fail_response":""}
+
+Transcript: honey I told you he was coming back tomorrow
+{"corrected":"","intent":"ignore","steps":[],"ok_response":"","already_response":"","fail_response":""}
+
+Transcript: make it dark
+{"corrected":"make it dark","intent":"action","steps":[{"domain":"light","service":"turn_off","area_id":"living_room"}],"ok_response":"Lights off.","already_response":"","fail_response":"Sorry, I couldn't turn the lights off."}
+
 Transcript: turn off all living room lights and the office fan
 {"corrected":"turn off all living room lights and the office fan","intent":"action","steps":[{"domain":"light","service":"turn_off","area_id":"living_room"},{"domain":"fan","service":"turn_off","entity_id":"fan.office_fan"}],"ok_response":"Living room lights and office fan are now off.","fail_response":"Sorry, I couldn't turn those off."}
 
@@ -181,23 +199,43 @@ def _build_context(entities: list[dict], areas: list[dict]) -> str:
     States are intentionally omitted: under the HA roster cache they can be stale
     and must not bias entity/intent selection — the executor's readback is the
     authority on current state. Caps at 30 entities for the context budget."""
+    area_of = {eid: a["area_id"] for a in areas for eid in a.get("entities", ())}
     area_rows = ["area_id,name"] + [f"{a['area_id']},{a['name']}" for a in areas]
-    rows = ["entity_id,name"]
+    rows = ["entity_id,name,area_id"]
     for e in entities[:30]:
-        rows.append(f"{e['entity_id']},{e['name']}")
+        rows.append(f"{e['entity_id']},{e['name']},{area_of.get(e['entity_id'], '')}")
     return "Areas:\n" + "\n".join(area_rows) + "\n\nDevices:\n" + "\n".join(rows)
 
 
+_FUZZY_THRESHOLD = 80
+
+
 def _fuzzy_resolve(candidate: str, valid_ids: set[str]) -> str | None:
-    """Return the best fuzzy match for candidate in valid_ids, or None if below threshold."""
+    """Return the best fuzzy match for candidate in valid_ids, or None if below threshold.
+
+    Matching is confined to the candidate's own domain, so a hallucinated
+    ``fan.*`` id can never resolve to a ``light.*`` entity and fire the wrong
+    action. WRatio is used over token_set_ratio because Zigbee ids carry hardware
+    suffixes ("fan.master_bedroom_2_gang_1_right") that token scorers penalise
+    heavily — the natural guess "fan.master_bedroom_fan" scored 76 and was
+    dropped, which cost a full thinking retry to re-derive the same answer.
+    """
     if not valid_ids:
         return None
+    # Confinement only applies to domain-qualified sets (entity_ids). area_ids
+    # carry no domain, so a model-emitted "light.living_room" must still match
+    # "living_room" rather than filter the pool down to nothing.
+    domain = candidate.split(".")[0] if "." in candidate else ""
+    if domain and any("." in v for v in valid_ids):
+        pool = {e for e in valid_ids if e.split(".")[0] == domain}
+        if not pool:
+            return None
+    else:
+        pool = valid_ids
     try:
         from rapidfuzz import process, fuzz
-        match, score, _ = process.extractOne(
-            candidate, valid_ids, scorer=fuzz.token_set_ratio
-        )
-        if score >= 80:
+        match, score, _ = process.extractOne(candidate, pool, scorer=fuzz.WRatio)
+        if score >= _FUZZY_THRESHOLD:
             return match
     except ImportError:
         pass
@@ -333,7 +371,9 @@ async def plan(
         parsed["steps"] = _validate_steps(parsed["steps"], entities, areas)
         result = parsed
 
-        if result["steps"] or attempt == 1:
+        # "ignore" is a deliberate empty plan (TV noise / non-directed speech) —
+        # don't burn the thinking retry on it.
+        if result["steps"] or result["intent"] == "ignore" or attempt == 1:
             return result
         log.info("PLAN | no actionable steps on attempt 1 — retrying with thinking")
 

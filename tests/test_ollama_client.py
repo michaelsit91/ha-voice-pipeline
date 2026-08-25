@@ -50,7 +50,7 @@ async def test_chat_pins_keep_alive_and_num_ctx():
     o._loop = None
     await o.chat(system="s", user="u")
     assert sent["json"]["keep_alive"] == -1
-    assert sent["json"]["options"]["num_ctx"] == 8192
+    assert sent["json"]["options"]["num_ctx"] == o._num_ctx
 
 
 @pytest.mark.asyncio
@@ -76,3 +76,32 @@ async def test_chat_think_param_default_false_and_overridable():
     assert sent["headers"] == {"X-Consumer": "ha-voice-pipeline"}
     await o.chat(system="s", user="u", think=True)
     assert sent["json"]["think"] is True
+
+
+@pytest.mark.asyncio
+async def test_thinking_pass_gets_a_larger_num_predict_budget():
+    """Reasoning tokens come out of num_predict, so the thinking pass needs its own
+    budget — at the fast path's cap the model spends it all reasoning and returns
+    empty content, which the planner cannot parse."""
+    sent = {}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"message": {"content": "ok"}}
+
+    class _FakeClient:
+        is_closed = False
+        async def post(self, url, json=None, headers=None):
+            sent["json"] = json
+            return _Resp()
+
+    o = OllamaClient("http://test:11434", "m")
+    o._client = _FakeClient()
+    o._loop = None
+
+    await o.chat(system="s", user="u")
+    assert sent["json"]["options"]["num_predict"] == o._num_predict
+
+    await o.chat(system="s", user="u", think=True)
+    assert sent["json"]["options"]["num_predict"] == o._thinking_num_predict
+    assert OllamaClient._THINKING_NUM_PREDICT > OllamaClient._DEFAULT_NUM_PREDICT

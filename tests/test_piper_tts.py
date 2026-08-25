@@ -54,6 +54,13 @@ async def _run_assist(text: str) -> dict:
         events: dict[str, dict] = {}
         while True:
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
+            # A rejected run replies with a result frame and then goes quiet — without
+            # this the helper blocks the full timeout and reports a bare TimeoutError,
+            # hiding the actual reason (e.g. the conversation agent isn't loaded).
+            if msg.get("type") == "result" and not msg.get("success", True):
+                err = msg.get("error", {})
+                pytest.fail(f"assist_pipeline/run rejected: "
+                            f"{err.get('code')} — {err.get('message')}")
             if msg.get("type") == "event":
                 ev = msg["event"]
                 events[ev["type"]] = ev.get("data", {})
@@ -97,8 +104,11 @@ async def test_piper_uses_wyoming_voice_engine():
 
 @pytest.mark.asyncio
 async def test_piper_generates_audio_url():
-    """tts-end event contains a media_id URL, confirming Piper synthesised audio."""
-    events = await _run_assist("turn on the office light")
+    """tts-end event contains a media_id URL, confirming Piper synthesised audio.
+
+    Driven by a query: an action acks silently, so HA has nothing to synthesise
+    and emits no tts-end at all."""
+    events = await _run_assist("is the office light on")
 
     assert "tts-end" in events, f"No tts-end event — got: {list(events)}"
     media_id = events["tts-end"].get("tts_output", {}).get("media_id", "")

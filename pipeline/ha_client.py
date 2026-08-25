@@ -87,7 +87,8 @@ class HAClient(PooledClient):
         _TMPL = (
             '{% set r = namespace(a=[]) %}'
             '{% for aid in areas() %}'
-            '{% set r.a = r.a + [{"area_id": aid, "name": area_name(aid)}] %}'
+            '{% set r.a = r.a + [{"area_id": aid, "name": area_name(aid),'
+            ' "entities": area_entities(aid)}] %}'
             '{% endfor %}{{ r.a | tojson }}'
         )
         r = await _read_with_retry(lambda: self._get_client().post(

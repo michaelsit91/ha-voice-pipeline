@@ -195,6 +195,11 @@ async def run_pipeline(
     planned = await plan(transcript, filtered_entities, areas, ollama)
     log.info("PLAN | intent=%s corrected=%r steps=%s",
              planned.get("intent"), planned.get("corrected"), planned.get("steps"))
+    if planned.get("intent") == "ignore":
+        # Non-directed speech (TV dialogue / background conversation picked up by
+        # a false wake) — stay silent instead of talking over the room.
+        log.info("IGNORE | non-directed speech: %r", transcript)
+        return ""
     if not planned.get("steps"):
         return "Sorry, I didn't understand that command."
 
