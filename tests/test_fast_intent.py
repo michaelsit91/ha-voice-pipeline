@@ -107,3 +107,23 @@ def test_volume_percent_declines_when_buried_in_speech():
     assert p is None
     p = match_fast_intent("set volume to 40 percent", E, AREAS)
     assert p["service"] == "volume_set" and p["volume_level"] == 0.4
+
+
+def test_query_reports_every_tied_device():
+    """"the kitchen light" with two kitchen lights is plural, not ambiguous.
+    Resolving the tie here keeps the choice away from the planner, which picks by
+    entity_id substring and lands on the washing machine light 1 run in 6."""
+    ents = [
+        {"entity_id": "light.living_room_3_gang_1_center", "name": "Kitchen Light 1", "state": "off"},
+        {"entity_id": "light.kitchen_2_gang_right_2", "name": "Kitchen Light 2", "state": "off"},
+        {"entity_id": "light.kitchen_2_gang_left", "name": "Washing Machine Light", "state": "off"},
+    ]
+    p = match_fast_intent("is the kitchen light on", ents, AREAS)
+    assert p["kind"] == "query"
+    names = [t["name"] for t in p["targets"]]
+    assert names == ["Kitchen Light 1", "Kitchen Light 2"]
+
+
+def test_query_tie_does_not_sweep_in_a_different_device():
+    p = match_fast_intent("is the desk lamp on", E, AREAS)
+    assert [t["name"] for t in p["targets"]] == ["Desk Lamp"]

@@ -89,6 +89,14 @@ def _speak_states(named_states: list[tuple[str, str]]) -> str:
         return _speak_state(*named_states[0])
     on  = [n for n, st in named_states if st == "on"]
     off = [n for n, st in named_states if st != "on"]
+    # A handful of devices in the same state get named: "the Kitchen Light 1 and
+    # Kitchen Light 2 are off" answers the question, "all of those are off" only
+    # answers it if the listener already knows which devices were checked.
+    if len(named_states) <= 3 and (not on or not off):
+        names = [n for n, _ in named_states]
+        joined = " and ".join([", ".join(names[:-1]), names[-1]] if len(names) > 2
+                              else names)
+        return f"The {joined} are {'on' if on else 'off'}."
     if not on:
         return "All of those are off."
     if not off:

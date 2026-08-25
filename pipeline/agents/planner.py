@@ -78,6 +78,7 @@ Rules:
 - entity_id MUST be an exact entity_id from the device list — never invent one
 - domain is the prefix before the dot in entity_id (e.g. entity_id "light.kitchen_1" → domain "light")
 - Room membership comes from each device's area_id column, NOT from entity names/ids. Some lights are wired to switches in OTHER rooms, so an entity like "light.living_room_*" may actually live in the kitchen area — entity names are unreliable for room inference. For ANY whole-room command ("the kitchen light", "living room lights", "all office fans"), emit ONE step with "area_id" from the Areas table and NO entity_id; Home Assistant then controls every matching device in that area. NEVER guess a single entity_id for a room command. When a query needs ONE device in a room, pick it by its area_id column and name — an id containing "kitchen" may belong to another room, and the kitchen's light may have a living_room_* id.
+- The NAME column is what the user is speaking, the entity_id is not. Never choose a device whose name does not contain the words spoken when one whose name does contain them exists in the same area. "the kitchen light" means a device NAMED like a kitchen light, not a device whose id happens to contain "kitchen" — a "Washing Machine Light" sitting in the kitchen area is not the kitchen light.
 - For queries: use service "get_state"
 - For actions: use the appropriate service (turn_on, turn_off, toggle, media_play, media_pause, etc.)
 

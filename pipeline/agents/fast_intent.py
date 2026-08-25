@@ -38,6 +38,11 @@ _MEDIA_CONTROL_PATTERNS = (
 _MEDIA_EXTRA_WORDS = int(os.getenv("FAST_PATH_MEDIA_EXTRA_WORDS", "3"))
 
 _WORD_RE = re.compile(r"[\w']+")
+
+# Score spread within which query targets count as the same request. Narrow: it
+# should catch "Kitchen Light 1" against "Kitchen Light 2", not sweep in a
+# different device that merely scored close.
+_QUERY_TIE_MARGIN = 3
 # Empty on purpose: fast-path successes are acknowledged by the satellite's
 # success chime (firmware on_end), not by spoken TTS — snappier, Alexa-like.
 _ACK = ""
@@ -105,6 +110,28 @@ def _resolve_entity(target: str, entities: list[dict], min_score: int, margin: i
     if best_score >= min_score and (best_score - second) >= margin:
         return best
     return None
+
+
+def _resolve_query_targets(target: str, entities: list[dict], min_score: int) -> list[dict]:
+    """Every entity tied at the top for this name, best first.
+
+    _resolve_entity refuses a tie because acting on the wrong device is harmful.
+    A query is different: "the kitchen light" with a Kitchen Light 1 and a
+    Kitchen Light 2 is not ambiguous to the speaker, it is plural — and reporting
+    both is the answer. Resolving it here also keeps the choice away from the
+    planner, which otherwise picks by entity_id substring and can land on a
+    "Washing Machine Light" whose id happens to contain "kitchen".
+    """
+    if not target:
+        return []
+    scored = sorted(
+        ((_score(target, e["name"].lower()), e) for e in entities),
+        key=lambda x: -x[0],
+    )
+    if not scored or scored[0][0] < min_score:
+        return []
+    best_score = scored[0][0]
+    return [e for sc, e in scored if best_score - sc <= _QUERY_TIE_MARGIN]
 
 
 _PLAY_RE = re.compile(r"^(?:play|put on)\s+(.+?)[.!?]?$")
@@ -216,13 +243,19 @@ def match_fast_intent(
                 return {"kind": "action", "domain": domain_word, "service": service,
                         "area_id": area["area_id"], "ack": _ACK}
 
+    if kind == "query":
+        targets = _resolve_query_targets(_target_text(t), entities, min_score)
+        if not targets:
+            return None
+        return {"kind": "query",
+                "entity_id": targets[0]["entity_id"], "name": targets[0]["name"],
+                "targets": [{"entity_id": e["entity_id"], "name": e["name"]}
+                            for e in targets]}
+
     entity = _resolve_entity(_target_text(t), entities, min_score, margin)
     if entity is None:
         return None
     domain = entity["entity_id"].split(".")[0]
-
-    if kind == "query":
-        return {"kind": "query", "entity_id": entity["entity_id"], "name": entity["name"]}
 
     # Action: intent must be valid for the matched domain.
     if domain not in _TOGGLEABLE:

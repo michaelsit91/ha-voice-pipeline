@@ -122,6 +122,13 @@ async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None,
     """Execute a fast-path plan optimistically (no readback) and return the spoken
     response, or None to fall back to the LLM planner (e.g. unresolved MA player)."""
     if fast["kind"] == "query":
+        targets = fast.get("targets") or [{"entity_id": fast["entity_id"], "name": fast["name"]}]
+        if len(targets) > 1:
+            read = await asyncio.gather(*[ha.get_state(t["entity_id"]) for t in targets],
+                                        return_exceptions=True)
+            named = [(t["name"], st["state"])
+                     for t, st in zip(targets, read) if not isinstance(st, Exception)]
+            return _speak_states(named) if named else None
         try:
             st = await ha.get_state(fast["entity_id"])
         except Exception:

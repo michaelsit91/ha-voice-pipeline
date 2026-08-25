@@ -121,3 +121,12 @@ async def test_query_intent_never_actuates():
                          ha=ha, ollama=MagicMock())
     ha.call_service.assert_not_awaited()
     assert resp != "Done."
+
+
+def test_a_few_devices_in_one_state_are_named():
+    """"All of those are off" only answers the question if the listener already
+    knows which devices were checked."""
+    from pipeline.agents.executor import _speak_states
+    assert _speak_states([("Kitchen Light 1", "off"), ("Kitchen Light 2", "off")]) == \
+        "The Kitchen Light 1 and Kitchen Light 2 are off."
+    assert _speak_states([("A", "on"), ("B", "off")]) == "1 on and 1 off."
