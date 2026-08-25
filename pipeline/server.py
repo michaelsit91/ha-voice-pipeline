@@ -69,7 +69,10 @@ async def _lifespan(app: FastAPI):
         async with httpx.AsyncClient(timeout=30) as c:
             await c.post(f"{_ollama.url}/api/chat",
                          json={"model": _ollama.model, "messages": [], "keep_alive": -1,
-                               "options": {"num_ctx": 8192}})
+                               # Ollama keys a resident model on its context size, so warming
+                               # at any other num_ctx loads a second instance and the first
+                               # real command pays the load cost anyway.
+                               "options": {"num_ctx": _ollama._num_ctx}})
     except Exception:
         pass
     # Discover satellite → MA player map
@@ -89,12 +92,19 @@ app = FastAPI(lifespan=_lifespan)
 
 
 def _require_api_key(request: Request) -> None:
-    """FastAPI dependency: enforce X-API-Key when API_KEY env var is set."""
+    """FastAPI dependency: enforce the API key when the API_KEY env var is set."""
     api_key = os.getenv("API_KEY", "").strip()
     if not api_key:
         return
-    if request.headers.get("X-API-Key", "") != api_key:
-        raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+    # Home Assistant reaches us through an OpenAI-compatible client, which sends
+    # the key as "Authorization: Bearer <key>" and never as X-API-Key. Accepting
+    # only the latter would reject every real voice command.
+    authorization = request.headers.get("Authorization", "")
+    bearer = authorization[7:].strip() if authorization[:7].lower() == "bearer " else ""
+    if api_key not in (request.headers.get("X-API-Key", ""), bearer):
+        raise HTTPException(status_code=401,
+                            detail="invalid or missing API key "
+                                   "(X-API-Key or Authorization: Bearer)")
 
 
 @app.get("/health")
@@ -104,7 +114,11 @@ async def health():
 
 @app.get("/health/deep")
 async def health_deep():
-    """Probe HA and Ollama reachability. Always HTTP 200; check body status."""
+    """Probe HA and Ollama reachability.
+
+    Returns 503 on degraded/down so `curl -sf` — and therefore the container
+    healthcheck — fails on it. A body-only verdict let a 20-day dependency
+    outage report healthy the whole time."""
     import httpx as _httpx
     results: dict = {}
 
@@ -125,7 +139,8 @@ async def health_deep():
     all_ok   = all(v["status"] == "ok"    for v in results.values())
     all_down = all(v["status"] == "error" for v in results.values())
     overall  = "ok" if all_ok else ("down" if all_down else "degraded")
-    return {"status": overall, "components": results}
+    return JSONResponse({"status": overall, "components": results},
+                        status_code=200 if all_ok else 503)
 
 
 @app.get("/v1/models")

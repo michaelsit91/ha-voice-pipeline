@@ -32,27 +32,67 @@ def test_health_returns_ok():
 
 # ── /health/deep ──────────────────────────────────────────────────────────────
 
-def test_health_deep_returns_expected_shape():
-    """GET /health/deep must return status and per-component health."""
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock(side_effect=Exception("unreachable"))
+def _patch_probes(*, ha_ok: bool, ollama_ok: bool):
+    """Patch httpx.AsyncClient so /health/deep's two probes succeed or fail per-URL."""
+    async def _get(url, headers=None):
+        ok = ha_ok if "/api/version" not in url else ollama_ok
+        if not ok:
+            raise Exception("unreachable")
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
 
     mock_instance = AsyncMock()
     mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
     mock_instance.__aexit__ = AsyncMock(return_value=False)
-    mock_instance.get = AsyncMock(side_effect=Exception("unreachable"))
+    mock_instance.get = AsyncMock(side_effect=_get)
+    return patch("httpx.AsyncClient", return_value=mock_instance)
 
-    with patch("pipeline.server._httpx" if False else "httpx.AsyncClient",
-               return_value=mock_instance):
+
+def test_health_deep_returns_expected_shape():
+    """GET /health/deep must return status and per-component health."""
+    with _patch_probes(ha_ok=False, ollama_ok=False):
         r = _client().get("/health/deep")
 
-    assert r.status_code == 200
     body = r.json()
     assert body["status"] in ("ok", "degraded", "down")
     assert "components" in body
     for key in ("ha", "ollama"):
         assert key in body["components"]
         assert body["components"][key]["status"] in ("ok", "error")
+
+
+def test_health_deep_returns_200_when_all_ok():
+    with _patch_probes(ha_ok=True, ollama_ok=True):
+        r = _client().get("/health/deep")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
+def test_health_deep_returns_503_when_down():
+    """A 20-day outage stayed green because the verdict was body-only — curl -sf must fail."""
+    with _patch_probes(ha_ok=False, ollama_ok=False):
+        r = _client().get("/health/deep")
+    assert r.status_code == 503
+    assert r.json()["status"] == "down"
+
+
+def test_health_deep_returns_503_when_degraded():
+    with _patch_probes(ha_ok=True, ollama_ok=False):
+        r = _client().get("/health/deep")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["components"]["ha"]["status"] == "ok"
+    assert body["components"]["ollama"]["status"] == "error"
+
+
+def test_health_stays_unconditional_liveness():
+    """/health must not gain dependency probing — it is the liveness probe."""
+    with _patch_probes(ha_ok=False, ollama_ok=False):
+        r = _client().get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
 
 
 # ── /v1/models ────────────────────────────────────────────────────────────────
@@ -191,10 +231,78 @@ def test_api_key_auth_bypassed_when_not_set(monkeypatch):
     assert r.status_code == 200
 
 
+def test_api_key_auth_accepts_bearer_header(monkeypatch):
+    """Home Assistant's OpenAI-compatible client sends the key as Bearer, never X-API-Key."""
+    monkeypatch.setenv("API_KEY", "secret-key-123")
+    with patch("pipeline.server.run_pipeline", new_callable=AsyncMock, return_value="done"):
+        r = _client().post("/v1/chat/completions",
+                           headers={"Authorization": "Bearer secret-key-123"},
+                           json={"messages": [{"role": "user", "content": "test"}]})
+    assert r.status_code == 200
+
+
+def test_api_key_auth_rejects_wrong_bearer_key(monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret-key-123")
+    r = _client().post("/v1/chat/completions",
+                       headers={"Authorization": "Bearer wrong"},
+                       json={"messages": [{"role": "user", "content": "test"}]})
+    assert r.status_code == 401
+
+
+def test_api_key_auth_rejects_bare_authorization_value(monkeypatch):
+    """The raw key without the Bearer scheme is not a valid credential."""
+    monkeypatch.setenv("API_KEY", "secret-key-123")
+    r = _client().post("/v1/chat/completions",
+                       headers={"Authorization": "secret-key-123"},
+                       json={"messages": [{"role": "user", "content": "test"}]})
+    assert r.status_code == 401
+
+
+def test_reload_accepts_bearer_header(monkeypatch):
+    monkeypatch.setenv("API_KEY", "secret-key-123")
+    with patch("pipeline.server._ma") as mock_ma:
+        mock_ma.discover = AsyncMock()
+        mock_ma._satellite_map = {}
+        r = _client().post("/reload", headers={"Authorization": "Bearer secret-key-123"})
+    assert r.status_code == 200
+
+
 def test_health_never_requires_api_key(monkeypatch):
     monkeypatch.setenv("API_KEY", "secret-key-123")
     r = _client().get("/health")
     assert r.status_code == 200
+
+
+# ── Startup warmup ────────────────────────────────────────────────────────────
+
+def test_warmup_uses_configured_num_ctx(monkeypatch):
+    """Ollama keys a resident model on num_ctx, so a hardcoded warmup context
+    loads a second instance and the first real command pays the load cost."""
+    from pipeline.server import _ollama
+    monkeypatch.setattr(_ollama, "_num_ctx", 65536, raising=False)
+
+    sent: dict = {}
+
+    async def _post(url, json=None):
+        sent["url"] = url
+        sent["json"] = json
+        return MagicMock()
+
+    mock_instance = AsyncMock()
+    mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+    mock_instance.__aexit__ = AsyncMock(return_value=False)
+    mock_instance.post = AsyncMock(side_effect=_post)
+
+    with patch("httpx.AsyncClient", return_value=mock_instance), \
+         patch("pipeline.server._ma") as mock_ma:
+        mock_ma.discover = AsyncMock()
+        mock_ma.close = AsyncMock()
+        mock_ma._satellite_map = {}
+        with TestClient(app):
+            pass
+
+    assert sent["json"]["options"]["num_ctx"] == 65536
+    assert sent["json"]["keep_alive"] == -1
 
 
 # ── VRAM proxy URL routing ────────────────────────────────────────────────────

@@ -3,7 +3,9 @@ services:
     build: .
     image: ha-voice-pipeline:latest
     container_name: ha-voice-pipeline
-    restart: unless-stopped
+    # always, not unless-stopped: a host driver-upgrade reboot leaves
+    # unless-stopped containers down until someone notices.
+    restart: always
     ports:
       - "${PORT:-18795}:${PORT:-18795}"
     env_file:
@@ -11,11 +13,25 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:18795/health"]
+      # /health is unconditional liveness and cannot see a dead dependency.
+      # /health/deep probes HA and Ollama and answers 503 when either is down.
+      test: ["CMD", "curl", "-sf", "http://localhost:18795/health/deep"]
       interval: 30s
-      timeout: 5s
+      # Two dependency probes at 4s each, plus request overhead.
+      timeout: 10s
       retries: 3
       start_period: 15s
+    # Every voice transcript is logged verbatim, so unrotated logs grow without bound.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          # Request routing and HTTP clients only — inference runs in Ollama.
+          memory: 512M
     networks:
       - llm-voice
 

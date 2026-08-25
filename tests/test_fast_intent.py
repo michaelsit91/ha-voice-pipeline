@@ -75,3 +75,35 @@ def test_play_song_is_music_fast_intent():
 def test_dim_not_handled_lights_are_onoff():
     # These lights have no brightness; dimming is not a fast-path intent.
     assert match_fast_intent("dim the kitchen light to 50%", E, AREAS) is None
+
+
+def test_media_control_declines_when_buried_in_speech():
+    """Media phrases name no device, so the fast path would answer TV dialogue
+    without the planner's ignore classifier ever seeing it. Past the surrounding
+    word allowance the match is declined so the planner arbitrates."""
+    for line in ("can you turn it up i can't hear it",
+                 "turn it down honey the baby's sleeping",
+                 "pause for a second while i get the door",
+                 "just stop the music already"):
+        assert match_fast_intent(line, E, AREAS) is None, line
+
+
+def test_media_control_still_fast_for_real_commands():
+    """The allowance must not cost the fast path the commands it exists for."""
+    for line, service in (("louder", "volume_up"),
+                          ("volume up", "volume_up"),
+                          ("quieter", "volume_down"),
+                          ("turn the volume down", "volume_down"),
+                          ("turn it up", "volume_up"),
+                          ("pause", "media_pause"),
+                          ("stop the music", "media_stop")):
+        p = match_fast_intent(line, E, AREAS)
+        assert p is not None and p["service"] == service, line
+        assert p["needs_player"] is True
+
+
+def test_volume_percent_declines_when_buried_in_speech():
+    p = match_fast_intent("i was telling her to set volume to 40 percent yesterday", E, AREAS)
+    assert p is None
+    p = match_fast_intent("set volume to 40 percent", E, AREAS)
+    assert p["service"] == "volume_set" and p["volume_level"] == 0.4

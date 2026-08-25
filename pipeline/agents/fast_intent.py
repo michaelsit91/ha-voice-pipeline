@@ -5,6 +5,7 @@ state queries) directly to a Home Assistant action WITHOUT calling the LLM, but
 only when a single entity target matches confidently. Anything ambiguous,
 compound, or unrecognised returns None so the caller falls back to the planner.
 """
+import os
 import re
 
 # Words stripped from the transcript before fuzzy-matching the device target.
@@ -18,9 +19,33 @@ _FILLER = {
 _TOGGLEABLE = {"light", "switch", "fan", "input_boolean"}
 
 _PCT = r"(\d{1,3})\s*(?:percent|%)"
+
+# Media-control phrases, matched in order. Each names no device, so the runner
+# injects the satellite's player.
+_MEDIA_CONTROL_PATTERNS = (
+    (re.compile(r"\b(volume up|louder|turn it up|turn up the volume)\b"), "volume_up"),
+    (re.compile(r"\b(volume down|quieter|softer|turn it down|lower the volume)\b"), "volume_down"),
+    # Bare "stop" is caught as hesitation upstream.
+    (re.compile(r"\bstop\b"), "media_stop"),
+    (re.compile(r"\bpause\b"), "media_pause"),
+)
+
+# Spoken words tolerated around a matched media-control phrase. Because these
+# phrases carry no device name, the amount of surrounding speech is the only
+# signal separating a real command from TV dialogue ("pause for a second while I
+# get the door"). Past the allowance the fast path declines so the planner's
+# ignore classifier arbitrates.
+_MEDIA_EXTRA_WORDS = int(os.getenv("FAST_PATH_MEDIA_EXTRA_WORDS", "3"))
+
+_WORD_RE = re.compile(r"[\w']+")
 # Empty on purpose: fast-path successes are acknowledged by the satellite's
 # success chime (firmware on_end), not by spoken TTS — snappier, Alexa-like.
 _ACK = ""
+
+
+def _extra_words(transcript: str, matched: str) -> int:
+    """How many spoken words surround the matched phrase."""
+    return len(_WORD_RE.findall(transcript)) - len(_WORD_RE.findall(matched))
 
 
 def _target_text(transcript: str) -> str:
@@ -148,20 +173,18 @@ def match_fast_intent(
     # ── Media controls — no named device target; the runner injects the player ──
     m = re.search(r"volume\b.*?" + _PCT, t) or re.search(_PCT + r"\s*volume", t)
     if m:
+        if _extra_words(t, m.group(0)) > _MEDIA_EXTRA_WORDS:
+            return None
         level = max(0, min(100, int(m.group(1)))) / 100
         return {"kind": "action", "domain": "media_player", "service": "volume_set",
                 "volume_level": round(level, 2), "needs_player": True, "ack": _ACK}
-    if re.search(r"\b(volume up|louder|turn it up|turn up the volume)\b", t):
-        return {"kind": "action", "domain": "media_player", "service": "volume_up",
-                "needs_player": True, "ack": _ACK}
-    if re.search(r"\b(volume down|quieter|softer|turn it down|lower the volume)\b", t):
-        return {"kind": "action", "domain": "media_player", "service": "volume_down",
-                "needs_player": True, "ack": _ACK}
-    if re.search(r"\bstop\b", t):  # bare "stop" is caught as hesitation upstream
-        return {"kind": "action", "domain": "media_player", "service": "media_stop",
-                "needs_player": True, "ack": _ACK}
-    if re.search(r"\bpause\b", t):
-        return {"kind": "action", "domain": "media_player", "service": "media_pause",
+    for pattern, media_service in _MEDIA_CONTROL_PATTERNS:
+        m = pattern.search(t)
+        if m is None:
+            continue
+        if _extra_words(t, m.group(0)) > _MEDIA_EXTRA_WORDS:
+            return None
+        return {"kind": "action", "domain": "media_player", "service": media_service,
                 "needs_player": True, "ack": _ACK}
 
     music = _match_play(t)
