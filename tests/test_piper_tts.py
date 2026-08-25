@@ -116,18 +116,13 @@ async def test_reply_phrases_vary_across_runs():
     (\"Sure,\", \"Done!\", \"Got it,\", etc.).  With 5 runs and ~70% variation rate
     we statistically expect several distinct phrases.
     """
-    responses = []
-    for _ in range(5):
-        events = await _run_assist("turn on the kitchen light")
-        tts_input = events.get("tts-start", {}).get("tts_input", "")
-        responses.append(tts_input)
-        print(f"  Piper: {tts_input!r}")
-
-    unique = set(responses)
-    assert len(unique) >= 2, (
-        f"Expected varied Piper phrases across 5 runs, but got only: {unique}"
-    )
-    print(f"\n  {len(unique)} distinct phrases across 5 runs ✓")
+    # Common commands now take the fast path and reply a terse "OK"; the varied
+    # phrasing applies to planner-path responses via executor._vary, tested here.
+    from pipeline.agents.executor import _vary
+    base = "The office light is now on."
+    variants = {_vary(base) for _ in range(50)}
+    assert len(variants) >= 2, f"Expected varied phrases, got only: {variants}"
+    assert base in variants  # empty-prefix case leaves the sentence unchanged
 
 
 @pytest.mark.asyncio

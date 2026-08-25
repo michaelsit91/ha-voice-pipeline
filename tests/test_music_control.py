@@ -143,7 +143,8 @@ async def test_runner_injects_ma_player_into_media_stop():
     ollama = _make_ollama_returning(_plan_with_service("media_stop"))
     ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
 
-    with patch("pipeline.runner.execute") as mock_exec:
+    with patch("pipeline.runner.execute") as mock_exec, \
+         patch("pipeline.runner._FAST_PATH_ENABLED", False):
         mock_exec.return_value = "Music stopped."
         await run_pipeline("stop the music", ha, ollama, ma=ma, satellite="respeaker_lite")
 
@@ -157,7 +158,8 @@ async def test_runner_injects_ma_player_into_media_pause():
     ollama = _make_ollama_returning(_plan_with_service("media_pause"))
     ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
 
-    with patch("pipeline.runner.execute") as mock_exec:
+    with patch("pipeline.runner.execute") as mock_exec, \
+         patch("pipeline.runner._FAST_PATH_ENABLED", False):
         mock_exec.return_value = "Paused."
         await run_pipeline("pause", ha, ollama, ma=ma, satellite="respeaker_lite")
 
@@ -264,7 +266,8 @@ async def test_runner_injects_ma_player_into_volume_up():
     ollama = _make_ollama_returning(_plan_with_service("volume_up"))
     ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
 
-    with patch("pipeline.runner.execute") as mock_exec:
+    with patch("pipeline.runner.execute") as mock_exec, \
+         patch("pipeline.runner._FAST_PATH_ENABLED", False):
         mock_exec.return_value = "Volume up."
         await run_pipeline("louder", ha, ollama, ma=ma, satellite="respeaker_lite")
 
@@ -278,7 +281,8 @@ async def test_runner_injects_ma_player_into_volume_down():
     ollama = _make_ollama_returning(_plan_with_service("volume_down"))
     ma = _make_ma_runner("media_player.respeaker_lite_media_player_2")
 
-    with patch("pipeline.runner.execute") as mock_exec:
+    with patch("pipeline.runner.execute") as mock_exec, \
+         patch("pipeline.runner._FAST_PATH_ENABLED", False):
         mock_exec.return_value = "Volume down."
         await run_pipeline("quieter", ha, ollama, ma=ma, satellite="respeaker_lite")
 

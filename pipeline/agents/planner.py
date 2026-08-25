@@ -68,7 +68,7 @@ Rules:
 - intent "action": user wants to change something
 - entity_id MUST be an exact entity_id from the device list — never invent one
 - domain is the prefix before the dot in entity_id (e.g. entity_id "light.kitchen_1" → domain "light")
-- Room/area is determined by entity_id (e.g. "fan.living_room_*" = living room, "light.kitchen_*" = kitchen). Friendly names may be mislabeled — always trust entity_id over name for room inference.
+- Room membership comes from the Areas table, NOT from entity names/ids. Some lights are wired to switches in OTHER rooms, so an entity like "light.living_room_*" may actually live in the kitchen area — entity names are unreliable for room inference. For ANY whole-room command ("the kitchen light", "living room lights", "all office fans"), emit ONE step with "area_id" from the Areas table and NO entity_id; Home Assistant then controls every matching device in that area. NEVER guess a single entity_id for a room command.
 - For queries: use service "get_state"
 - For actions: use the appropriate service (turn_on, turn_off, toggle, media_play, media_pause, etc.)
 
@@ -117,11 +117,14 @@ VOLUME COMMANDS:
 
 --- EXAMPLES ---
 
-Devices: light.office_light,Office Light | fan.living_room_fan,Living Room Fan
-Areas: living_room,Living Room | office,Office
+Devices: light.office_light,Office Light | fan.living_room_fan,Living Room Fan | light.kitchen_ceiling,Kitchen Ceiling
+Areas: living_room,Living Room | office,Office | kitchen,Kitchen
 
 Transcript: turn on the office lite
-{"corrected":"turn on the office light","intent":"action","steps":[{"domain":"light","service":"turn_on","entity_id":"light.office_light"}],"ok_response":"The office light is now on.","already_response":"The office light is already on.","fail_response":"Sorry, I couldn't turn on the office light."}
+{"corrected":"turn on the office light","intent":"action","steps":[{"domain":"light","service":"turn_on","area_id":"office"}],"ok_response":"The office light is now on.","already_response":"","fail_response":"Sorry, I couldn't turn on the office light."}
+
+Transcript: turn off the kitchen light
+{"corrected":"turn off the kitchen light","intent":"action","steps":[{"domain":"light","service":"turn_off","area_id":"kitchen"}],"ok_response":"The kitchen light is now off.","already_response":"","fail_response":"Sorry, I couldn't turn off the kitchen light."}
 
 Transcript: 打开客厅风扇
 {"corrected":"打开客厅风扇","intent":"action","steps":[{"domain":"fan","service":"turn_on","area_id":"living_room"}],"ok_response":"The living room fan is now on.","fail_response":"Sorry, I couldn't turn on the living room fan."}
@@ -134,9 +137,6 @@ Transcript: is the office light on
 
 Transcript: turn off all living room lights and the office fan
 {"corrected":"turn off all living room lights and the office fan","intent":"action","steps":[{"domain":"light","service":"turn_off","area_id":"living_room"},{"domain":"fan","service":"turn_off","entity_id":"fan.office_fan"}],"ok_response":"Living room lights and office fan are now off.","fail_response":"Sorry, I couldn't turn those off."}
-
-Transcript: dim the kitchen light to fifty percent
-{"corrected":"dim the kitchen light to 50%","intent":"action","steps":[{"domain":"light","service":"turn_on","entity_id":"light.kitchen_light","brightness_pct":50}],"ok_response":"Kitchen light dimmed to 50%.","fail_response":"Sorry, I couldn't dim the kitchen light."}
 
 Transcript: turn off everything
 {"corrected":"turn off everything","intent":"action","steps":[{"domain":"light","service":"turn_off","entity_id":"light.office_light"},{"domain":"fan","service":"turn_off","entity_id":"fan.living_room_fan"}],"ok_response":"Everything is off.","already_response":"","fail_response":"Sorry, I couldn't turn everything off."}

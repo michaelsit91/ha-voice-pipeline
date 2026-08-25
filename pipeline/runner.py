@@ -1,11 +1,17 @@
-import asyncio, logging, re
+import asyncio, logging, os, re
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.agents.planner import plan, _HESITATION_PATTERNS
-from pipeline.agents.executor import execute
+from pipeline.agents.executor import execute, _run_volume_step
+from pipeline.agents.fast_intent import match_fast_intent
 from pipeline.spotify_connect_sync import SpotifyConnectSync
 
 log = logging.getLogger("pipeline")
+
+# ── Alexa-like deterministic fast path ────────────────────────────────────────
+_FAST_PATH_ENABLED = os.getenv("FAST_PATH_ENABLED", "true").lower() in ("true", "1", "yes")
+_FAST_MIN_SCORE = int(os.getenv("FAST_PATH_MIN_SCORE", "82"))
+_FAST_MARGIN = int(os.getenv("FAST_PATH_MARGIN", "8"))
 
 _STOP_WORDS = {"is","the","a","an","all","on","off","of","and","or","to","in",
                "are","was","it","be","turn","what","how","does","do"}
@@ -115,6 +121,35 @@ async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient
         return "All of those are on."
     return f"{len(on)} on and {len(off)} off."
 
+async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None) -> str | None:
+    """Execute a fast-path plan optimistically (no readback) and return the spoken
+    response, or None to fall back to the LLM planner (e.g. unresolved MA player)."""
+    if fast["kind"] == "query":
+        try:
+            st = await ha.get_state(fast["entity_id"])
+        except Exception:
+            return None
+        return f"The {fast['name']} is {st['state']}."
+
+    domain, service = fast["domain"], fast["service"]
+    entity_id = fast.get("entity_id")
+    area_id = fast.get("area_id")
+    if fast.get("needs_player"):
+        entity_id = ma.resolve_player(satellite) if ma is not None else None
+        if not entity_id:
+            return None  # no MA player resolved — let the LLM path route music
+    extra = {k: fast[k] for k in ("volume_level",) if k in fast}
+    try:
+        if service in ("volume_up", "volume_down"):
+            await _run_volume_step(ha, entity_id, service)
+        else:
+            await ha.call_service(domain, service, entity_id=entity_id, area_id=area_id, **extra)
+    except Exception as e:
+        log.warning("FAST | execution failed: %s", e)
+        return "Sorry."
+    return fast["ack"]
+
+
 async def run_pipeline(
     transcript: str,
     ha: HAClient,
@@ -129,6 +164,16 @@ async def run_pipeline(
         return "OK."
 
     entities, areas = await asyncio.gather(ha.get_entities(), ha.get_areas())
+
+    # Alexa-like fast path: confident common commands skip the LLM entirely.
+    if _FAST_PATH_ENABLED:
+        fast = match_fast_intent(transcript, entities, areas, _FAST_MIN_SCORE, _FAST_MARGIN)
+        if fast is not None:
+            resp = await _execute_fast(fast, ha, ma, satellite)
+            if resp is not None:
+                log.info("FAST | %s -> %r", fast.get("service", fast["kind"]), resp)
+                return resp
+
     filtered_entities = _filter_entities(entities, transcript)
     planned = await plan(transcript, filtered_entities, areas, ollama)
     log.info("PLAN | intent=%s corrected=%r steps=%s",
