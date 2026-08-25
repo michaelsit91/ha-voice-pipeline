@@ -40,7 +40,8 @@ async def test_chat_pins_keep_alive_and_num_ctx():
 
     class _FakeClient:
         is_closed = False
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
+            sent["headers"] = headers
             sent["json"] = json
             return _Resp()
 
@@ -62,7 +63,8 @@ async def test_chat_think_param_default_false_and_overridable():
 
     class _FakeClient:
         is_closed = False
-        async def post(self, url, json=None):
+        async def post(self, url, json=None, headers=None):
+            sent["headers"] = headers
             sent["json"] = json
             return _Resp()
 
@@ -71,5 +73,6 @@ async def test_chat_think_param_default_false_and_overridable():
     o._loop = None
     await o.chat(system="s", user="u")
     assert sent["json"]["think"] is False
+    assert sent["headers"] == {"X-Consumer": "ha-voice-pipeline"}
     await o.chat(system="s", user="u", think=True)
     assert sent["json"]["think"] is True
