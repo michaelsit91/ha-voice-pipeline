@@ -51,6 +51,16 @@ _STEP_META_KEYS = frozenset({"domain", "service", "entity_id", "area_id",
 # Volume step size for "louder" / "quieter" commands.
 _VOLUME_STEP = 0.10
 
+# Service data the planner is permitted to send, per service. _ALLOWED_SERVICES
+# gates which service runs; this gates what it runs with, so a plan that reaches
+# an allowed service cannot smuggle arbitrary parameters into HA alongside it.
+# Services absent from this map accept no data at all.
+_ALLOWED_SERVICE_DATA: dict[str, frozenset[str]] = {
+    "volume_set":      frozenset({"volume_level"}),
+    "set_temperature": frozenset({"temperature", "target_temp_high", "target_temp_low"}),
+    "set_hvac_mode":   frozenset({"hvac_mode"}),
+}
+
 # Services the planner is permitted to emit. The LLM chooses domain+service, so
 # this is the safety boundary preventing a prompt-injected transcript from
 # reaching a destructive service. music_assistant is handled before _run_step.
@@ -64,6 +74,26 @@ _ALLOWED_SERVICES: dict[str, frozenset[str]] = {
     "media_player":  frozenset({"media_play", "media_pause", "media_stop",
                                 "volume_up", "volume_down", "volume_set", "get_state"}),
 }
+
+
+def _speak_state(name: str, state: str) -> str:
+    """Spoken form of a device state — never read raw HA states aloud."""
+    if state in ("unavailable", "unknown"):
+        return f"The {name} isn't responding."
+    return f"The {name} is {state}."
+
+
+def _speak_states(named_states: list[tuple[str, str]]) -> str:
+    """Spoken form for one or many device states."""
+    if len(named_states) == 1:
+        return _speak_state(*named_states[0])
+    on  = [n for n, st in named_states if st == "on"]
+    off = [n for n, st in named_states if st != "on"]
+    if not on:
+        return "All of those are off."
+    if not off:
+        return "All of those are on."
+    return f"{len(on)} on and {len(off)} off."
 
 
 async def _run_volume_step(
@@ -104,8 +134,14 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
         return {"entity_id": entity_id or area_id, "outcome": "failed",
                 "error": f"service {domain}.{service} not allowed"}
 
-    # Extra keys (e.g. volume_level, brightness_pct) are forwarded to HA as service data.
-    extra     = {k: v for k, v in step.items() if k not in _STEP_META_KEYS}
+    permitted = _ALLOWED_SERVICE_DATA.get(service, frozenset())
+    extra     = {k: v for k, v in step.items()
+                 if k not in _STEP_META_KEYS and k in permitted}
+    dropped   = [k for k in step
+                 if k not in _STEP_META_KEYS and k not in permitted]
+    if dropped:
+        log.warning("EXEC | dropped service data not permitted for %s.%s: %s",
+                    domain, service, dropped)
 
     # volume_up/down → precise 10% steps via volume_set
     if service in ("volume_up", "volume_down") and isinstance(entity_id, str):
@@ -303,7 +339,25 @@ async def execute(
     if music_steps:
         if ma is None:
             return "Sorry, Music Assistant is not configured."
+        if len(music_steps) > 1:
+            # Playing two things at once is meaningless, so only the first runs —
+            # but say so rather than discarding the rest silently.
+            log.warning("EXEC | ignoring %d extra music step(s): %s",
+                        len(music_steps) - 1,
+                        [st.get("query") for st in music_steps[1:]])
         return await _run_music_step(music_steps[0], ha, ma, spotify_search)
+
+    # A question must never actuate. When the planner labels a transcript a query
+    # but emits a write step, the write is dropped rather than executed — asking
+    # "is the kitchen light on" cannot be allowed to toggle it.
+    if intent == "query":
+        reads = [s for s in steps if s.get("service") == "get_state"]
+        if len(reads) != len(steps):
+            log.warning("EXEC | dropped %d write step(s) from a query intent",
+                        len(steps) - len(reads))
+        if not reads:
+            return "Sorry, I couldn't check that."
+        steps = reads
 
     # Run all HA steps in parallel
     results = await asyncio.gather(*[_run_step(s, ha) for s in steps])
@@ -316,6 +370,13 @@ async def execute(
     log.info("EXEC | outcomes=%s", outcomes)
 
     if n_fail == 0:
+        # Queries answer with the state that was read. Falling through to the
+        # action register below would answer a question with "Done."
+        if intent == "query":
+            names = entity_names or {}
+            return _speak_states([(names.get(r["entity_id"], str(r["entity_id"])),
+                                   r.get("state", "unknown"))
+                                  for r in results])
         if all(r["outcome"] == "already" for r in results) and already_response:
             return _vary(already_response)
         # One confirmation register: simple single-step action successes get the

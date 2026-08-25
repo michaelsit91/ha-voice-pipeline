@@ -95,3 +95,29 @@ async def test_already_case_stays_informative():
                              ok_response="The light is now on.",
                              already_response="The light is already on.")
     assert "already on" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_reaching_the_executor_speaks_state_not_done():
+    """A question that falls past the query fast path must still be answered with
+    the state. The action register's "Done." is not an answer to a question."""
+    ha = _ha(state="on")
+    resp = await execute(intent="query",
+                         steps=[{"domain": "light", "service": "get_state",
+                                 "entity_id": "light.kitchen"}],
+                         ha=ha, ollama=MagicMock(),
+                         entity_names={"light.kitchen": "Kitchen Light"})
+    assert resp == "The Kitchen Light is on."
+
+
+@pytest.mark.asyncio
+async def test_query_intent_never_actuates():
+    """A misclassified query carrying a write step must not toggle the device —
+    asking whether a light is on cannot be allowed to turn it off."""
+    ha = _ha()
+    resp = await execute(intent="query",
+                         steps=[{"domain": "light", "service": "toggle",
+                                 "entity_id": "light.kitchen"}],
+                         ha=ha, ollama=MagicMock())
+    ha.call_service.assert_not_awaited()
+    assert resp != "Done."

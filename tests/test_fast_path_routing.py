@@ -93,3 +93,27 @@ async def test_flag_disabled_uses_llm():
          patch.object(executor, "_ZIGBEE_SETTLE_S", 0):
         await runner.run_pipeline("turn on the kitchen light", ha, ollama)
     ollama.chat.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_area_query_resolves_by_membership_not_entity_name():
+    """An area query must read the devices the area actually contains. Entity ids
+    and names are not evidence of membership here: the kitchen's light carries a
+    living_room_* id, and a kitchen_* id is the washing machine light."""
+    entities = [
+        {"entity_id": "light.living_room_3_gang_1_center", "name": "Kitchen Light 1", "state": "on"},
+        {"entity_id": "light.kitchen_2_gang_left", "name": "Washing Machine Light", "state": "off"},
+    ]
+    areas = [{"area_id": "kitchen", "name": "Kitchen",
+              "entities": ["light.living_room_3_gang_1_center"]}]
+    ha = MagicMock()
+    ha.get_state = AsyncMock(return_value={
+        "entity_id": "light.living_room_3_gang_1_center", "state": "on", "attributes": {}})
+
+    resp = await runner._query_fast_path(
+        [{"domain": "light", "service": "get_state", "area_id": "kitchen"}],
+        entities, ha, areas)
+
+    assert resp == "The Kitchen Light 1 is on."
+    read = [c.args[0] for c in ha.get_state.await_args_list]
+    assert read == ["light.living_room_3_gang_1_center"]

@@ -2,7 +2,8 @@ import asyncio, logging, os, re
 from pipeline.ha_client import HAClient
 from pipeline.ollama_client import OllamaClient
 from pipeline.agents.planner import plan, _HESITATION_PATTERNS
-from pipeline.agents.executor import execute, _run_volume_step, _run_music_step
+from pipeline.agents.executor import (execute, _run_volume_step, _run_music_step,
+                                      _speak_state, _speak_states)
 from pipeline.agents.fast_intent import match_fast_intent
 
 log = logging.getLogger("pipeline")
@@ -74,7 +75,8 @@ def _filter_entities(entities: list[dict], transcript: str) -> list[dict]:
     # (likely a broadcast command like "everything off" or gibberish).
     return fuzzy or entities
 
-async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient) -> str | None:
+async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient,
+                           areas: list[dict] | None = None) -> str | None:
     """Skip executor LLM for state queries — saves one Ollama round-trip.
     Handles both single and multi-entity queries."""
     if not steps or not all(s.get("service") == "get_state" for s in steps):
@@ -89,10 +91,14 @@ async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient
         elif isinstance(eid, str):
             entity_ids.append(eid)
         elif s.get("area_id"):
-            # Resolve area_id to matching entities via keyword match on name
-            # (HA has no get_state for areas; planner sometimes uses area_id for queries)
-            area_kw = s["area_id"].replace("_", " ").lower()
-            matched = [e["entity_id"] for e in entities if area_kw in e["name"].lower()]
+            # HA has no get_state for an area, so the members are read individually.
+            # Membership comes from the area record, never from entity names: a
+            # kitchen light here can carry a living_room_* id and vice versa.
+            known = {e["entity_id"] for e in entities}
+            matched = [eid
+                       for a in (areas or []) if a["area_id"] == s["area_id"]
+                       for eid in a.get("entities", ())
+                       if eid in known]
             if matched:
                 entity_ids.extend(matched)
             else:
@@ -109,23 +115,7 @@ async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient
              for st in states if not isinstance(st, Exception)]
     if not valid:
         return None
-    if len(valid) == 1:
-        name, state = valid[0]
-        return _speak_state(name, state)
-    on  = [n for n, s in valid if s == "on"]
-    off = [n for n, s in valid if s != "on"]
-    if not on:
-        return "All of those are off."
-    if not off:
-        return "All of those are on."
-    return f"{len(on)} on and {len(off)} off."
-
-def _speak_state(name: str, state: str) -> str:
-    """Spoken form of a device state — never read raw HA states aloud."""
-    if state in ("unavailable", "unknown"):
-        return f"The {name} isn't responding."
-    return f"The {name} is {state}."
-
+    return _speak_states(valid)
 
 async def _execute_fast(fast: dict, ha: HAClient, ma, satellite: str | None,
                         spotify_search=None) -> str | None:
@@ -216,7 +206,7 @@ async def run_pipeline(
 
     # Fast path: single-step queries skip the executor LLM entirely
     if planned.get("intent") == "query":
-        fast = await _query_fast_path(planned["steps"], entities, ha)
+        fast = await _query_fast_path(planned["steps"], entities, ha, areas)
         if fast:
             return fast
 
