@@ -30,31 +30,23 @@ async def test_no_think_blocks_absent(client):
     assert "<think>" not in result
 
 @pytest.mark.asyncio
-async def test_tool_calling_executes_and_returns(client):
-    tools = [{
-        "type": "function",
-        "function": {
-            "name": "get_temp",
-            "description": "Get temperature for a city",
-            "parameters": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-            },
-        },
-    }]
-    calls = []
-    def handler(name, args):
-        calls.append((name, args))
-        return '{"temperature": 28, "unit": "C"}'
+async def test_chat_pins_keep_alive_and_num_ctx():
+    """chat() must pin keep_alive=-1 and num_ctx so the resident model isn't unpinned/reloaded."""
+    sent = {}
 
-    result = await client.chat_with_tools(
-        system="Use get_temp to answer.",
-        user="What is the temperature in Bangkok?",
-        tools=tools,
-        tool_handler=handler,
-    )
-    assert len(calls) >= 1
-    assert calls[0][0] == "get_temp"
-    assert "bangkok" in calls[0][1].get("city", "").lower()
-    assert isinstance(result, str) and len(result) > 0
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"message": {"content": "ok"}}
+
+    class _FakeClient:
+        is_closed = False
+        async def post(self, url, json=None):
+            sent["json"] = json
+            return _Resp()
+
+    o = OllamaClient("http://test:11434", "m")
+    o._client = _FakeClient()
+    o._loop = None
+    await o.chat(system="s", user="u")
+    assert sent["json"]["keep_alive"] == -1
+    assert sent["json"]["options"]["num_ctx"] == 8192

@@ -161,6 +161,7 @@ async def status():
 @app.post("/reload", dependencies=[Depends(_require_api_key)])
 async def reload():
     """Re-run Music Assistant satellite discovery without container restart."""
+    _ha.clear_cache()
     await _ma.discover()
     log.info("RELOAD | satellite_map refreshed: %s", _ma._satellite_map)
     return {"satellite_map": _ma._satellite_map}
@@ -168,7 +169,10 @@ async def reload():
 
 @app.post("/v1/chat/completions", dependencies=[Depends(_require_api_key)])
 async def chat_completions(request: Request):
-    body     = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     messages = body.get("messages", [])
     stream   = body.get("stream", False)
 

@@ -117,7 +117,7 @@ VOLUME COMMANDS:
 
 --- EXAMPLES ---
 
-Devices: light.office_light,Office Light,on | fan.living_room_fan,Living Room Fan,off
+Devices: light.office_light,Office Light | fan.living_room_fan,Living Room Fan
 Areas: living_room,Living Room | office,Office
 
 Transcript: turn on the office lite
@@ -138,7 +138,7 @@ Transcript: turn off all living room lights and the office fan
 Transcript: dim the kitchen light to fifty percent
 {"corrected":"dim the kitchen light to 50%","intent":"action","steps":[{"domain":"light","service":"turn_on","entity_id":"light.kitchen_light","brightness_pct":50}],"ok_response":"Kitchen light dimmed to 50%.","fail_response":"Sorry, I couldn't dim the kitchen light."}
 
-Devices: fan.living_room_fan,Living Room Fan,on | fan.master_bedroom_fan,Master Bedroom Fan,off | fan.office_fan,Office Fan,on | fan.guest_room_fan,Guest Room Fan,off
+Devices: fan.living_room_fan,Living Room Fan | fan.master_bedroom_fan,Master Bedroom Fan | fan.office_fan,Office Fan | fan.guest_room_fan,Guest Room Fan
 Areas: living_room,Living Room | master_bedroom,Master Bedroom | office,Office | guest_room,Guest Room
 
 Transcript: toggle all the fans
@@ -147,7 +147,7 @@ Transcript: toggle all the fans
 Transcript: turn off all the fans
 {"corrected":"turn off all the fans","intent":"action","steps":[{"domain":"fan","service":"turn_off","entity_id":["fan.living_room_fan","fan.master_bedroom_fan","fan.office_fan","fan.guest_room_fan"]}],"ok_response":"All fans are now off.","already_response":"All fans are already off.","fail_response":"Sorry, I couldn't turn off the fans."}
 
-Devices: media_player.respeaker_lite_media_player_2,Spotify,playing
+Devices: media_player.respeaker_lite_media_player_2,Spotify
 Transcript: play blinding lights
 {"corrected":"play Blinding Lights","intent":"action","steps":[{"domain":"music_assistant","service":"play_media","entity_id":"media_player.respeaker_lite_media_player_2","query":"Blinding Lights","media_type":"track"}],"ok_response":"Playing Blinding Lights.","already_response":"","fail_response":"Sorry, I couldn't play that."}
 
@@ -174,13 +174,14 @@ Transcript: set volume to 40 percent
 """
 
 def _build_context(entities: list[dict], areas: list[dict]) -> str:
-    """Build the prompt context string from the (already-filtered) entity list.
-    Caps at 30 entities to stay within the LLM context budget; the caller
-    (runner._filter_entities) is responsible for relevance-based pre-filtering."""
+    """Build the prompt context from the (already-filtered) entity list.
+    States are intentionally omitted: under the HA roster cache they can be stale
+    and must not bias entity/intent selection — the executor's readback is the
+    authority on current state. Caps at 30 entities for the context budget."""
     area_rows = ["area_id,name"] + [f"{a['area_id']},{a['name']}" for a in areas]
-    rows = ["entity_id,name,state"]
+    rows = ["entity_id,name"]
     for e in entities[:30]:
-        rows.append(f"{e['entity_id']},{e['name']},{e['state']}")
+        rows.append(f"{e['entity_id']},{e['name']}")
     return "Areas:\n" + "\n".join(area_rows) + "\n\nDevices:\n" + "\n".join(rows)
 
 

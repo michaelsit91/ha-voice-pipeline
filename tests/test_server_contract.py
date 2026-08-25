@@ -234,3 +234,14 @@ def test_test_agents_has_no_hardcoded_entity_ids():
     src = pathlib.Path("tests/test_agents.py").read_text()
     assert "light.kitchen_ceiling" not in src, \
         "Hardcoded entity_id 'light.kitchen_ceiling' found in test_agents.py"
+
+
+def test_chat_completions_malformed_body_returns_400():
+    """Non-JSON request body must return 400, not 500."""
+    r = _client().post(
+        "/v1/chat/completions",
+        content=b"this is not json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 400
+    assert "error" in r.json()

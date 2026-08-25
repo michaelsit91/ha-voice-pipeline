@@ -1,5 +1,6 @@
-import asyncio, logging, re
+import logging, re
 import httpx
+from pipeline._http import PooledClient
 
 log = logging.getLogger("pipeline")
 
@@ -58,7 +59,7 @@ async def _discover_satellite_players(
     return result
 
 
-class MusicAssistantClient:
+class MusicAssistantClient(PooledClient):
     def __init__(self, ha_url: str, token: str, config_entry_id: str):
         self._url = ha_url.rstrip("/")
         self._hdrs = {
@@ -69,23 +70,7 @@ class MusicAssistantClient:
         self._satellite_map: dict[str, str] = {}
         self._client: httpx.AsyncClient | None = None
         self._loop: object | None = None
-
-    def _get_client(self) -> httpx.AsyncClient:
-        try:
-            current_loop: object | None = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        loop_changed = self._loop is not None and self._loop is not current_loop
-        if self._client is None or self._client.is_closed or loop_changed:
-            self._client = httpx.AsyncClient()
-            self._loop = current_loop
-        return self._client
-
-    async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
-            self._loop = None
+        self._client_timeout = None
 
     async def discover(self) -> None:
         """Populate satellite→player map from HA. Call once at startup."""

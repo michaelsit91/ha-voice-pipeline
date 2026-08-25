@@ -1,41 +1,42 @@
-import asyncio, httpx
+import os, time, httpx
+from pipeline._http import PooledClient
 
 CONTROLLABLE_DOMAINS = {"light", "switch", "fan", "media_player", "climate", "cover", "input_boolean"}
 
 
-class HAClient:
+class HAClient(PooledClient):
     def __init__(self, ha_url: str, token: str):
         self._url = ha_url.rstrip("/")
         self._hdrs = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         self._client: httpx.AsyncClient | None = None
         self._loop: object | None = None  # tracks which event loop owns _client
+        self._client_timeout = None  # HA passes per-call timeouts
+        self._cache_ttl = float(os.getenv("HA_CACHE_TTL_S", "10"))
+        self._areas_ttl = float(os.getenv("HA_AREAS_TTL_S", "300"))
+        self._cache: dict[str, tuple[float, object]] = {}
 
-    def _get_client(self) -> httpx.AsyncClient:
-        """Return the shared client, creating it lazily and recreating on loop change.
+    def clear_cache(self) -> None:
+        """Invalidate cached entities/areas so the next call refetches."""
+        self._cache.clear()
 
-        In production there is one event loop per process lifetime, so the client
-        is created once and pooled indefinitely. In tests with per-function event
-        loops, the client is transparently recreated when the loop changes.
-        Only recreates on loop change when a loop was previously tracked
-        (avoids overwriting a test-injected mock when _loop is still None).
-        """
-        try:
-            current_loop: object | None = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-        loop_changed = self._loop is not None and self._loop is not current_loop
-        if self._client is None or self._client.is_closed or loop_changed:
-            self._client = httpx.AsyncClient()
-            self._loop = current_loop
-        return self._client
-
-    async def close(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
-            self._loop = None
+    async def _cached(self, key: str, fetch, ttl: float) -> object:
+        """Return a TTL-cached fetch result. ttl<=0 disables caching."""
+        if ttl > 0:
+            hit = self._cache.get(key)
+            if hit is not None and (time.monotonic() - hit[0]) < ttl:
+                return hit[1]
+        value = await fetch()
+        if ttl > 0:
+            self._cache[key] = (time.monotonic(), value)
+        return value
 
     async def get_entities(self) -> list[dict]:
+        return await self._cached("entities", self._fetch_entities, self._cache_ttl)
+
+    async def get_areas(self) -> list[dict]:
+        return await self._cached("areas", self._fetch_areas, self._areas_ttl)
+
+    async def _fetch_entities(self) -> list[dict]:
         r = await self._get_client().get(f"{self._url}/api/states", headers=self._hdrs, timeout=10)
         r.raise_for_status()
         raw = [
@@ -57,7 +58,7 @@ class HAClient:
         return [{"entity_id": e["entity_id"], "name": e["name"], "state": e["state"]}
                 for e in by_name.values()]
 
-    async def get_areas(self) -> list[dict]:
+    async def _fetch_areas(self) -> list[dict]:
         _TMPL = (
             '{% set r = namespace(a=[]) %}'
             '{% for aid in areas() %}'

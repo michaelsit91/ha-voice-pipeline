@@ -52,6 +52,20 @@ _STEP_META_KEYS = frozenset({"domain", "service", "entity_id", "area_id",
 # Volume step size for "louder" / "quieter" commands.
 _VOLUME_STEP = 0.10
 
+# Services the planner is permitted to emit. The LLM chooses domain+service, so
+# this is the safety boundary preventing a prompt-injected transcript from
+# reaching a destructive service. music_assistant is handled before _run_step.
+_ALLOWED_SERVICES: dict[str, frozenset[str]] = {
+    "light":         frozenset({"turn_on", "turn_off", "toggle", "get_state"}),
+    "switch":        frozenset({"turn_on", "turn_off", "toggle", "get_state"}),
+    "fan":           frozenset({"turn_on", "turn_off", "toggle", "get_state"}),
+    "input_boolean": frozenset({"turn_on", "turn_off", "toggle", "get_state"}),
+    "cover":         frozenset({"open_cover", "close_cover", "stop_cover", "toggle", "get_state"}),
+    "climate":       frozenset({"set_temperature", "set_hvac_mode", "turn_on", "turn_off", "get_state"}),
+    "media_player":  frozenset({"media_play", "media_pause", "media_stop",
+                                "volume_up", "volume_down", "volume_set", "get_state"}),
+}
+
 
 async def _run_volume_step(
     ha: HAClient,
@@ -85,6 +99,12 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
     service   = step["service"]
     entity_id = step.get("entity_id")
     area_id   = step.get("area_id")
+
+    if service not in _ALLOWED_SERVICES.get(domain, frozenset()):
+        log.warning("EXEC | refused disallowed service %s.%s", domain, service)
+        return {"entity_id": entity_id or area_id, "outcome": "failed",
+                "error": f"service {domain}.{service} not allowed"}
+
     # Extra keys (e.g. volume_level, brightness_pct) are forwarded to HA as service data.
     extra     = {k: v for k, v in step.items() if k not in _STEP_META_KEYS}
 
@@ -100,15 +120,20 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
         except Exception as e:
             return {"entity_id": entity_id, "outcome": "failed", "error": str(e)}
 
+    # Readback (state diff for "already" detection) is gated on the settle delay.
+    # ZIGBEE_PROPAGATION_MS=0 → skip both the pre-read and the post-read entirely
+    # for lowest action latency; the optimistic ok_response is spoken instead.
+    readback = _ZIGBEE_SETTLE_S > 0
+
     # Capture state before execution (string or list entity_id; area_id excluded —
     # HA exposes no per-area state endpoint).
     states_before: dict[str, str] = {}
-    if isinstance(entity_id, str) and entity_id:
+    if readback and isinstance(entity_id, str) and entity_id:
         try:
             states_before[entity_id] = (await ha.get_state(entity_id))["state"]
         except Exception:
             pass
-    elif isinstance(entity_id, list) and entity_id:
+    elif readback and isinstance(entity_id, list) and entity_id:
         try:
             pre = await asyncio.gather(
                 *[ha.get_state(eid) for eid in entity_id], return_exceptions=True
@@ -130,6 +155,10 @@ async def _run_step(step: dict, ha: HAClient) -> dict:
     # Area calls: HA has no per-area state endpoint, nothing to diff
     if area_id:
         return {"entity_id": area_id, "outcome": "success"}
+
+    # Fast mode: readback disabled — return optimistic success without re-reading
+    if not readback:
+        return {"entity_id": entity_id, "outcome": "success"}
 
     # Determine which entity IDs to read back
     target_ids: list[str] = (
