@@ -10,13 +10,14 @@ class OllamaClient(PooledClient):
         self._loop: object | None = None
         self._client_timeout = 60
 
-    async def chat(self, system: str, user: str, format: dict | str | None = None) -> str:
+    async def chat(self, system: str, user: str, format: dict | str | None = None,
+                   think: bool = False) -> str:
         messages = [
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ]
         body: dict = {"model": self.model, "messages": messages,
-                      "stream": False, "think": False,
+                      "stream": False, "think": think,
                       "keep_alive": -1, "options": {"num_ctx": self._num_ctx}}
         if format is not None:
             body["format"] = format

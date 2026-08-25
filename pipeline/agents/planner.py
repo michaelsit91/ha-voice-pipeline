@@ -138,6 +138,9 @@ Transcript: turn off all living room lights and the office fan
 Transcript: dim the kitchen light to fifty percent
 {"corrected":"dim the kitchen light to 50%","intent":"action","steps":[{"domain":"light","service":"turn_on","entity_id":"light.kitchen_light","brightness_pct":50}],"ok_response":"Kitchen light dimmed to 50%.","fail_response":"Sorry, I couldn't dim the kitchen light."}
 
+Transcript: turn off everything
+{"corrected":"turn off everything","intent":"action","steps":[{"domain":"light","service":"turn_off","entity_id":"light.office_light"},{"domain":"fan","service":"turn_off","entity_id":"fan.living_room_fan"}],"ok_response":"Everything is off.","already_response":"","fail_response":"Sorry, I couldn't turn everything off."}
+
 Devices: fan.living_room_fan,Living Room Fan | fan.master_bedroom_fan,Master Bedroom Fan | fan.office_fan,Office Fan | fan.guest_room_fan,Guest Room Fan
 Areas: living_room,Living Room | master_bedroom,Master Bedroom | office,Office | guest_room,Guest Room
 
@@ -220,6 +223,12 @@ def _validate_steps(steps: list[dict], entities: list[dict], areas: list[dict]) 
             if eid is not None:
                 step = {**step, "entity_id": eid}
 
+        # Split comma-joined entity_id strings some models emit ("light.a, light.b")
+        # so each id is validated and kept instead of dropped as one unknown id.
+        if isinstance(eid, str) and "," in eid:
+            eid = [p.strip() for p in eid.split(",") if p.strip()]
+            step = {**step, "entity_id": eid}
+
         # Validate / fix entity_id
         if eid is not None:
             if isinstance(eid, list):
@@ -288,35 +297,44 @@ async def plan(
     if _HESITATION_PATTERNS.search(transcript):
         return _HESITATION_RESPONSE
 
-    context = _build_context(entities, areas)
-    user    = f"{context}\n\nTranscript: {transcript}"
+    context   = _build_context(entities, areas)
+    base_user = f"{context}\n\nTranscript: {transcript}"
 
-    # Two attempts: first with JSON schema mode, retry on parse failure.
+    # Adaptive two-pass: the fast path runs with thinking OFF for low latency. Only
+    # if the first pass fails to parse OR yields no actionable steps do we retry
+    # with thinking ON (slower, but higher planning accuracy) — so the thinking
+    # cost is paid only when the cheap pass wasn't good enough.
+    result: dict | None = None
     for attempt in range(2):
-        raw = await ollama.chat(system=_SYSTEM, user=user, format=_RESPONSE_SCHEMA)
+        think = attempt == 1
+        user = base_user if attempt == 0 else (
+            f"{base_user}\n\nReply with ONLY the JSON object, no other text."
+        )
+        raw = await ollama.chat(system=_SYSTEM, user=user, format=_RESPONSE_SCHEMA, think=think)
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         try:
-            result = json.loads(raw)
-            break
+            parsed = json.loads(raw)
         except json.JSONDecodeError:
             if attempt == 0:
-                log.warning("PLAN | JSONDecodeError on attempt 1, retrying: %r", raw[:120])
-                # Second attempt: tighter user prompt
-                user = (f"{context}\n\nTranscript: {transcript}\n\n"
-                        "Reply with ONLY the JSON object, no other text.")
-            else:
-                log.error("PLAN | JSONDecodeError on attempt 2, giving up: %r", raw[:120])
-                return {"corrected": transcript, "intent": "action", "steps": [],
-                        "ok_response": "", "fail_response": "", "parse_error": raw}
+                log.warning("PLAN | JSONDecodeError on attempt 1, retrying with thinking: %r", raw[:120])
+                continue
+            log.error("PLAN | JSONDecodeError on attempt 2, giving up: %r", raw[:120])
+            return {"corrected": transcript, "intent": "action", "steps": [],
+                    "ok_response": "", "fail_response": "", "parse_error": raw}
 
-    result.setdefault("corrected", transcript)
-    result.setdefault("intent", "action")
-    result.setdefault("steps", [])
-    result.setdefault("ok_response", "")
-    result.setdefault("already_response", "")
-    result.setdefault("fail_response", "")
+        parsed.setdefault("corrected", transcript)
+        parsed.setdefault("intent", "action")
+        parsed.setdefault("steps", [])
+        parsed.setdefault("ok_response", "")
+        parsed.setdefault("already_response", "")
+        parsed.setdefault("fail_response", "")
 
-    # Post-validate entity/area ids — fuzzy-fix or drop bad ones
-    result["steps"] = _validate_steps(result["steps"], entities, areas)
+        # Post-validate entity/area ids — fuzzy-fix or drop bad ones
+        parsed["steps"] = _validate_steps(parsed["steps"], entities, areas)
+        result = parsed
+
+        if result["steps"] or attempt == 1:
+            return result
+        log.info("PLAN | no actionable steps on attempt 1 — retrying with thinking")
 
     return result

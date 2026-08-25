@@ -19,30 +19,55 @@ def _is_cjk(text: str) -> bool:
     """True if transcript contains ≥2 CJK characters (Chinese/Japanese/Korean)."""
     return len(_CJK_RE.findall(text)) >= 2
 
+# Max candidate entities passed to the planner (stays under _build_context's 30 cap).
+_FILTER_MAX = 25
+
+
+def _fuzzy_entity_candidates(
+    transcript: str, entities: list[dict], exclude: set[str], threshold: int = 72, limit: int = 8
+) -> list[dict]:
+    """Entities whose name fuzzily matches the transcript (catches misheard or
+    differently-phrased device names that the substring keyword filter misses).
+    No-op when rapidfuzz is unavailable."""
+    try:
+        from rapidfuzz import fuzz
+    except ImportError:
+        return []
+    t = transcript.lower()
+    scored = [
+        (fuzz.token_set_ratio(t, e["name"].lower()), e)
+        for e in entities if e["entity_id"] not in exclude
+    ]
+    scored = [(s, e) for s, e in scored if s >= threshold]
+    scored.sort(key=lambda x: -x[0])
+    return [e for _, e in scored[:limit]]
+
+
 def _filter_entities(entities: list[dict], transcript: str) -> list[dict]:
-    """Return entities most relevant to this transcript using keyword scoring.
-    For CJK transcripts, bypasses English keyword filter and returns all entities —
-    the model can map e.g. '办公室' → 'Office Light' from the full list context."""
+    """Return entities most relevant to this transcript.
+
+    Recall-first: keep ALL keyword matches (strong and partial) plus close fuzzy
+    matches the keyword filter missed, so the intended device is never dropped
+    before the planner sees it. For CJK transcripts, returns the full list (the
+    model handles cross-language mapping e.g. '办公室' → 'Office Light')."""
     if _is_cjk(transcript):
-        return entities  # full list: model handles cross-language entity mapping
+        return entities
 
     words = {w.lower() for w in re.split(r'\W+', transcript) if len(w) > 2} - _STOP_WORDS
     if not words:
         return entities
     scored = sorted(
-        [(e, sum(1 for w in words if w in e["name"].lower())) for e in entities],
+        ((e, sum(1 for w in words if w in e["name"].lower())) for e in entities),
         key=lambda x: -x[1],
     )
-    strong = [e for e, s in scored if s >= 2]
-    if strong:
-        return strong  # 2+ keyword matches — precise set, use only these
-    # No strong matches: include entities with at least 1 keyword match
-    partial = [e for e, s in scored if s >= 1]
-    if partial:
-        return partial[:15]
-    # Nothing keyword-matched — likely a broadcast command ("all fans", "everything off")
-    # or gibberish. Return the full list so the planner can see all devices.
-    return entities
+    matched = [e for e, s in scored if s >= 1]
+    matched_ids = {e["entity_id"] for e in matched}
+    fuzzy = _fuzzy_entity_candidates(transcript, entities, exclude=matched_ids)
+    if matched:
+        return (matched + fuzzy)[:_FILTER_MAX]
+    # Nothing keyword-matched — surface fuzzy candidates, else the full list
+    # (likely a broadcast command like "everything off" or gibberish).
+    return fuzzy or entities
 
 async def _query_fast_path(steps: list[dict], entities: list[dict], ha: HAClient) -> str | None:
     """Skip executor LLM for state queries — saves one Ollama round-trip.

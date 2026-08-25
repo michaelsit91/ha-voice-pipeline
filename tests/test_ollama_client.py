@@ -50,3 +50,26 @@ async def test_chat_pins_keep_alive_and_num_ctx():
     await o.chat(system="s", user="u")
     assert sent["json"]["keep_alive"] == -1
     assert sent["json"]["options"]["num_ctx"] == 8192
+
+
+@pytest.mark.asyncio
+async def test_chat_think_param_default_false_and_overridable():
+    sent = {}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"message": {"content": "ok"}}
+
+    class _FakeClient:
+        is_closed = False
+        async def post(self, url, json=None):
+            sent["json"] = json
+            return _Resp()
+
+    o = OllamaClient("http://test:11434", "m")
+    o._client = _FakeClient()
+    o._loop = None
+    await o.chat(system="s", user="u")
+    assert sent["json"]["think"] is False
+    await o.chat(system="s", user="u", think=True)
+    assert sent["json"]["think"] is True
