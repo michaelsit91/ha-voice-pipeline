@@ -28,6 +28,23 @@ CABINET_LIGHT = "light.hallway_3_gang_center_3"
 
 ZIGBEE_SETTLE = 1.0  # seconds to wait after a state change for Zigbee propagation
 
+# These tests drive real lights that the rest of the suite also touches, so a fixed
+# settle races whatever ran last. Poll for the expected state instead, and return
+# the last reading on timeout so the caller's assertion reports the real end state.
+_SETTLE_TIMEOUT = 12.0
+_POLL_INTERVAL = 0.5
+
+
+async def _settled_state(ha, entity_id: str, expected: str | None = None) -> dict:
+    deadline = asyncio.get_running_loop().time() + _SETTLE_TIMEOUT
+    while True:
+        state = await ha.get_state(entity_id)
+        if expected is None or state["state"] == expected:
+            return state
+        if asyncio.get_running_loop().time() >= deadline:
+            return state
+        await asyncio.sleep(_POLL_INTERVAL)
+
 
 @pytest.fixture(scope="module")
 def ha():
@@ -44,7 +61,8 @@ async def restore_office(ha):
     """Reset office light and fan to off before and after each test."""
     await ha.call_service("light", "turn_off", OFFICE_LIGHT)
     await ha.call_service("fan",   "turn_off", OFFICE_FAN)
-    await asyncio.sleep(ZIGBEE_SETTLE)
+    await _settled_state(ha, OFFICE_LIGHT, "off")
+    await _settled_state(ha, OFFICE_FAN, "off")
     yield
     await ha.call_service("light", "turn_off", OFFICE_LIGHT)
     await ha.call_service("fan",   "turn_off", OFFICE_FAN)
@@ -61,37 +79,32 @@ async def test_turn_on_verifies_state_changed(ha, ollama):
     response = await run_pipeline("turn on the office light", ha, ollama)
     # Empty response = silent success ack (satellite chime); state check below is the proof.
     assert isinstance(response, str)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    after = await ha.get_state(OFFICE_LIGHT)
+    after = await _settled_state(ha, OFFICE_LIGHT, "on")
     assert after["state"] == "on", f"Office light should be on, got: {after['state']}"
 
 
 async def test_turn_off_verifies_state_changed(ha, ollama):
     """Pipeline turns off office light and state actually changes."""
     await ha.call_service("light", "turn_on", OFFICE_LIGHT)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-    before = await ha.get_state(OFFICE_LIGHT)
+    before = await _settled_state(ha, OFFICE_LIGHT, "on")
     assert before["state"] == "on"
 
     response = await run_pipeline("turn off the office light", ha, ollama)
     # Empty response = silent success ack (satellite chime); state check below is the proof.
     assert isinstance(response, str)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    after = await ha.get_state(OFFICE_LIGHT)
+    after = await _settled_state(ha, OFFICE_LIGHT, "off")
     assert after["state"] == "off", f"Office light should be off, got: {after['state']}"
 
 
 async def test_status_query_returns_accurate_state(ha, ollama):
     """Status query reflects actual current state."""
     await ha.call_service("light", "turn_off", OFFICE_LIGHT)
-    await asyncio.sleep(ZIGBEE_SETTLE)
+    await _settled_state(ha, OFFICE_LIGHT, "off")
     response = await run_pipeline("is the office light on", ha, ollama)
     assert any(w in response.lower() for w in ("off", "no", "not"))
 
     await ha.call_service("light", "turn_on", OFFICE_LIGHT)
-    await asyncio.sleep(ZIGBEE_SETTLE)
+    await _settled_state(ha, OFFICE_LIGHT, "on")
     response = await run_pipeline("is the office light on", ha, ollama)
     assert any(w in response.lower() for w in ("on", "yes"))
 
@@ -106,9 +119,7 @@ async def test_fan_turn_on_verifies_state(ha, ollama):
     response = await run_pipeline("turn on the office fan", ha, ollama)
     # Empty response = silent success ack (satellite chime); state check below is the proof.
     assert isinstance(response, str)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    after = await ha.get_state(OFFICE_FAN)
+    after = await _settled_state(ha, OFFICE_FAN, "on")
     assert after["state"] == "on", f"Office fan should be on, got: {after['state']}"
 
 
@@ -118,9 +129,8 @@ async def test_multi_domain_light_and_fan(ha, ollama):
     """Command targeting both light and fan executes both."""
     response = await run_pipeline("turn on the office light and the office fan", ha, ollama)
     assert isinstance(response, str) and len(response) > 0
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    light_state = await ha.get_state(OFFICE_LIGHT)
+    # Either device satisfies this test, so wait on the light and read the fan as-is.
+    light_state = await _settled_state(ha, OFFICE_LIGHT, "on")
     fan_state   = await ha.get_state(OFFICE_FAN)
     # At least one should have changed (LLM may prioritize one)
     either_on = light_state["state"] == "on" or fan_state["state"] == "on"
@@ -136,9 +146,7 @@ async def test_stt_correction_controls_correct_entity(ha, ollama):
     response = await run_pipeline("tern on the office lait", ha, ollama)
     # Empty response = silent success ack (satellite chime); state check below is the proof.
     assert isinstance(response, str)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    after = await ha.get_state(OFFICE_LIGHT)
+    after = await _settled_state(ha, OFFICE_LIGHT, "on")
     assert after["state"] == "on", \
         f"STT-corrected command should have turned on office light, got: {after['state']}"
 
@@ -160,9 +168,7 @@ async def test_switch_entity_controlled(ha, ollama):
     response = await run_pipeline("turn on the hallway cabinet light", ha, ollama)
     # Empty response = silent success ack (satellite chime); device state is the proof.
     assert isinstance(response, str)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    after = await ha.get_state(CABINET_LIGHT)
+    after = await _settled_state(ha, CABINET_LIGHT, "on")
     await ha.call_service("light", "turn_off", CABINET_LIGHT)
     assert after["state"] == "on", f"Cabinet light should be on, got: {after['state']}"
 
@@ -175,10 +181,8 @@ async def test_toggle_command(ha, ollama):
     response = await run_pipeline("toggle the office light", ha, ollama)
     # Empty response = silent success ack (satellite chime); device state is the proof.
     assert isinstance(response, str)
-    await asyncio.sleep(ZIGBEE_SETTLE)
-
-    after = await ha.get_state(OFFICE_LIGHT)
     expected = "on" if before["state"] == "off" else "off"
+    after = await _settled_state(ha, OFFICE_LIGHT, expected)
     assert after["state"] == expected, \
         f"Toggle from {before['state']} should give {expected}, got {after['state']}"
 

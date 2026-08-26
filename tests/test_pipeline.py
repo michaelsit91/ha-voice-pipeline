@@ -5,8 +5,23 @@ import pytest
 
 from pipeline.runner import run_pipeline
 
-# Zigbee needs a moment to report the new state back to HA before we read it.
-ZIGBEE_SETTLE = 1.5
+# Zigbee reports asynchronously and these tests share real lights with the rest of
+# the suite, so a fixed settle races whatever ran last. Poll for the state instead.
+ZIGBEE_SETTLE_TIMEOUT = 12.0
+ZIGBEE_POLL_INTERVAL = 0.5
+
+
+async def _await_states(ha, entity_ids: list[str], expected) -> list[str]:
+    """Poll until every entity reports an expected state, or the timeout expires.
+
+    Returns the last reading either way, so the caller's assertion reports the
+    real end state rather than a timeout."""
+    deadline = asyncio.get_running_loop().time() + ZIGBEE_SETTLE_TIMEOUT
+    while True:
+        states = [(await ha.get_state(eid))["state"] for eid in entity_ids]
+        if expected(states) or asyncio.get_running_loop().time() >= deadline:
+            return states
+        await asyncio.sleep(ZIGBEE_POLL_INTERVAL)
 
 
 async def _area_lights(ha, area_id: str) -> list[str]:
@@ -41,8 +56,7 @@ async def test_single_action_responds(ha, ollama):
         r = await run_pipeline("turn on the kitchen light", ha, ollama)
         # Empty response = silent success ack (satellite chime); state is the proof.
         assert isinstance(r, str)
-        await asyncio.sleep(ZIGBEE_SETTLE)
-        states = [(await ha.get_state(eid))["state"] for eid in kitchen_lights]
+        states = await _await_states(ha, kitchen_lights, lambda st: "on" in st)
         assert "on" in states
     finally:
         for eid, state in initial.items():
@@ -65,8 +79,7 @@ async def test_multi_device_responds(ha, ollama):
         r = await run_pipeline("turn off all living room lights", ha, ollama)
         # Empty response = silent success ack (satellite chime); state is the proof.
         assert isinstance(r, str)
-        await asyncio.sleep(ZIGBEE_SETTLE)
-        states = [(await ha.get_state(eid))["state"] for eid in lr_lights]
+        states = await _await_states(ha, lr_lights, lambda st: set(st) == {"off"})
         assert set(states) == {"off"}
     finally:
         for eid, state in initial.items():
