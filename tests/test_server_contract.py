@@ -308,7 +308,7 @@ def test_warmup_uses_configured_num_ctx(monkeypatch):
 # ── VRAM proxy URL routing ────────────────────────────────────────────────────
 
 def test_resolve_ollama_url_via_vram_proxy():
-    assert _resolve_ollama_url("http://vram:8890", "http://ollama:11434") == "http://vram:8890/ollama"
+    assert _resolve_ollama_url("http://vram:8890", "http://ollama:11434") == "http://vram:8890/llm"
 
 
 def test_resolve_ollama_url_direct():
@@ -316,7 +316,7 @@ def test_resolve_ollama_url_direct():
 
 
 def test_resolve_ollama_url_vram_with_trailing_slash():
-    assert _resolve_ollama_url("http://vram:8890/", "http://ollama:11434") == "http://vram:8890/ollama"
+    assert _resolve_ollama_url("http://vram:8890/", "http://ollama:11434") == "http://vram:8890/llm"
 
 
 # ── Structural checks ─────────────────────────────────────────────────────────

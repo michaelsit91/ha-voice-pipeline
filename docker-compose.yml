@@ -14,7 +14,7 @@ services:
       - "host.docker.internal:host-gateway"
     healthcheck:
       # /health is unconditional liveness and cannot see a dead dependency.
-      # /health/deep probes HA and Ollama and answers 503 when either is down.
+      # /health/deep probes HA and the LLM and answers 503 when either is down.
       test: ["CMD", "curl", "-sf", "http://localhost:18795/health/deep"]
       interval: 30s
       # Two dependency probes at 4s each, plus request overhead.

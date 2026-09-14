@@ -24,10 +24,15 @@ log.addHandler(_handler)
 log.propagate = False
 
 
+# vram-manager mounts its inference proxy here; it serves the Ollama-shaped API
+# (/api/chat, /api/version, /api/ps) backed by llama.cpp.
+_VRAM_PROXY_PATH = "/llm"
+
+
 def _resolve_ollama_url(vram_manager_url: str, ollama_url: str) -> str:
-    """Return the effective Ollama URL: proxy path when VRAM_MANAGER_URL is set."""
+    """Return the effective inference URL: proxy path when VRAM_MANAGER_URL is set."""
     if vram_manager_url:
-        return f"{vram_manager_url.rstrip('/')}/ollama"
+        return f"{vram_manager_url.rstrip('/')}{_VRAM_PROXY_PATH}"
     return ollama_url
 
 
